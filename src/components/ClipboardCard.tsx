@@ -1,7 +1,19 @@
-import { Check, Clock, Copy, Link, Mail, Phone, Pin, Plus, Trash2 } from "lucide-react";
+import { Check, Clock, Copy, Link, Mail, Phone, Pin, Plus, Trash2, Monitor } from "lucide-react";
 import { formatTime } from "../lib/time";
 import type { HistoryItem } from "../types";
 import { TagsRow } from "./TagsRow";
+
+function formatBytes(bytes: number, decimals = 2) {
+  if (!+bytes) return "0 Bytes";
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  if (i >= 2 && bytes > 100 * 1024 * 1024) {
+    return "> 100 MB";
+  }
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+}
 
 interface ExtractedInfo {
   type: "url" | "email" | "phone" | "ip" | "domain";
@@ -130,15 +142,30 @@ export function ClipboardCard({
     >
       {/* 内容 */}
       <div className="text-sm font-medium text-slate-700 line-clamp-3 mb-2">
-        {item.contentType === "text" ? (
+        {item.contentType === "text" && (
           item.content
-        ) : (
+        )}
+        {item.contentType === "image" && (
           <div className="flex justify-center bg-slate-100 rounded-md p-1">
             <img
               src={item.content}
               alt="Clipboard content"
               className="max-h-32 max-w-full object-contain shadow-sm"
             />
+          </div>
+        )}
+        {item.contentType === "file" && (
+          <div className="flex flex-col space-y-1 text-sm bg-slate-50 p-2 rounded border border-slate-100">
+            {item.content.split("\n").map((line, idx) => (
+              <div key={idx} className="flex flex-row items-center text-slate-600 truncate">
+                <span className="truncate flex-1">{line}</span>
+                {item.metadata?.sizes && item.metadata.sizes[idx] && (
+                  <span className="ml-2 text-xs text-slate-400 shrink-0">
+                    {formatBytes(parseInt(item.metadata.sizes[idx], 10))}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -189,8 +216,25 @@ export function ClipboardCard({
         <div className="flex items-center space-x-1">
           <Clock className="w-3 h-3" />
           <span title={item.lastUsedAt ?? ""}>{formatTime(item.lastUsedAt)}</span>
-          {item.useCount > 1 && (
+            {item.useCount > 1 && (
             <span className="ml-1 text-slate-400">·×{item.useCount}</span>
+          )}
+          {item.metadata?.length && (
+            <span className="ml-1 text-slate-400">· {item.metadata.length[0]} chars</span>
+          )}
+          {item.metadata?.width && item.metadata?.height && (
+            <span className="ml-1 text-slate-400">· {item.metadata.width[0]}x{item.metadata.height[0]}</span>
+          )}
+          {item.metadata?.size && (
+            <span className="ml-1 text-slate-400">· {formatBytes(parseInt(item.metadata.size[0], 10))}</span>
+          )}
+          {item.metadata?.totalSize && (
+            <span className="ml-1 text-slate-400">· {formatBytes(parseInt(item.metadata.totalSize[0], 10))}</span>
+          )}
+          {item.metadata?.sourceApp && item.metadata.sourceApp[0] && (
+            <span className="ml-1 text-slate-400 truncate max-w-[120px] inline-block align-bottom" title={`来源: ${item.metadata.sourceApp[0]}`}>
+              · <Monitor className="w-3 h-3 inline-block -mt-1 mx-0.5" />{item.metadata.sourceApp[0]}
+            </span>
           )}
         </div>
 

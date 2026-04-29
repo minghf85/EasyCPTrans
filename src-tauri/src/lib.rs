@@ -48,6 +48,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             simulate_paste,
             commands::ingest_clipboard,
+            commands::read_clipboard_files,
+            commands::get_active_window,
             commands::load_history,
             commands::toggle_pin,
             commands::delete_item,

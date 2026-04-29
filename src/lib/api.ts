@@ -6,10 +6,14 @@ export const api = {
   loadHistory: (limit = 100) =>
     invoke<HistoryItem[]>("load_history", { limit }),
 
-  ingest: (contentType: string, content: string) =>
+  ingest: (contentType: string, content: string, metadata?: Record<string, string[]>, sourceApp?: string) =>
     invoke<IngestResult>("ingest_clipboard", {
-      payload: { contentType, content },
+      payload: { contentType, content, metadata: metadata ?? {}, sourceApp: sourceApp ?? "" },
     }),
+
+  readFiles: () => invoke<{path: string, size: number}[]>("read_clipboard_files"),
+
+  getActiveWindow: () => invoke<string>("get_active_window").catch(() => ""),
 
   togglePin: (id: number) => invoke<boolean>("toggle_pin", { id }),
 

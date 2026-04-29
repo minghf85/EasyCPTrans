@@ -20,7 +20,9 @@ export function useClipboardWatcher(
 
     const ingestText = async (text: string) => {
       try {
-        const r = await api.ingest("text", text);
+        const metadata = { length: [text.length.toString()] };
+        const win = await api.getActiveWindow();
+        const r = await api.ingest("text", text, metadata, win);
         if (!r.accepted) {
           console.log("dropped:", r.droppedBy, r.reason);
         }
@@ -29,9 +31,31 @@ export function useClipboardWatcher(
       }
     };
 
-    const ingestImage = async (dataUrl: string) => {
+    const ingestImage = async (dataUrl: string, width: number, height: number, byteLength: number) => {
       try {
-        const r = await api.ingest("image", dataUrl);
+        const metadata = {
+          width: [width.toString()],
+          height: [height.toString()],
+          size: [byteLength.toString()],
+        };
+        const win = await api.getActiveWindow();
+        const r = await api.ingest("image", dataUrl, metadata, win);
+        if (!r.accepted) {
+          console.log("dropped:", r.droppedBy, r.reason);
+        }
+      } catch (e) {
+        onErrorRef.current("Ingest error: " + String(e));
+      }
+    };
+
+        const ingestFile = async (files: { path: string; size: number }[]) => {
+      try {
+        const fileLines = files.map((f) => f.path).join("\n");
+        const totalSize = files.reduce((acc, f) => acc + f.size, 0);
+        const sizes = files.map((f) => f.size.toString());
+        const metadata = { count: [files.length.toString()], totalSize: [totalSize.toString()], sizes };
+        const win = await api.getActiveWindow();
+        const r = await api.ingest("file", fileLines, metadata, win);
         if (!r.accepted) {
           console.log("dropped:", r.droppedBy, r.reason);
         }
@@ -46,6 +70,21 @@ export function useClipboardWatcher(
         if (injectedOverrideSig !== null) {
           lastSig = injectedOverrideSig;
           injectedOverrideSig = null;
+        }
+
+        // 文件
+        try {
+          const files = await api.readFiles();
+          if (files && files.length > 0) {
+            const sig = "files_" + files.map((f) => f.path + "_" + f.size).join("|");
+            if (sig !== lastSig) {
+              lastSig = sig;
+              await ingestFile(files);
+              return;
+            }
+            // 不要返回，因为有可能Windows下既有文件又有文字
+          }
+        } catch {
         }
 
         // 文本
@@ -100,8 +139,9 @@ export function useClipboardWatcher(
                    canvas.height = targetHeight;
                    ctx.drawImage(tempCanvas, 0, 0, targetWidth, targetHeight);
                    const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+                   const byteLen = Math.round((dataUrl.length * 3) / 4);
                    lastSig = sig;
-                   await ingestImage(dataUrl);
+                   await ingestImage(dataUrl, targetWidth, targetHeight, byteLen);
                 }
               }
             }

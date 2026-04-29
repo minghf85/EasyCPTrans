@@ -18,6 +18,7 @@ import {
   emptyFilter,
   isFilterActive,
   type Scope,
+  type FilterState,
 } from "./lib/filter";
 import type { HistoryItem } from "./types";
 
@@ -27,6 +28,11 @@ const SHORTCUT = "CommandOrControl+Shift+E";
 function App() {
   const [search, setSearch] = useState("");
   const [scope, setScope] = useState<Scope>("all");
+  const [advancedFilters, setAdvancedFilters] = useState<Partial<FilterState>>({
+    timeRange: [null, null],
+    textLen: [null, null],
+    fileSize: [null, null]
+  });
   const [activeTags, setActiveTags] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
@@ -37,10 +43,10 @@ function App() {
   useClipboardWatcher(POLL_INTERVAL_MS, setErrorMsg);
   useGlobalShortcut(SHORTCUT, setErrorMsg);
 
-  const filterState = { search, scope, activeTags };
+  const filterState = { search, scope, activeTags, ...advancedFilters };
   const filtered = useMemo(
-    () => applyFilters(history, filterState),
-    [history, search, scope, activeTags],
+    () => applyFilters(history, filterState as FilterState),
+    [history, search, scope, activeTags, advancedFilters],
   );
   const hasFilters = isFilterActive(filterState);
 
@@ -55,6 +61,11 @@ function App() {
     setSearch(f.search);
     setScope(f.scope);
     setActiveTags(f.activeTags);
+    setAdvancedFilters({
+      timeRange: [null, null],
+      textLen: [null, null],
+      fileSize: [null, null]
+    });
   };
 
   const handleCopy = async (item: HistoryItem | { id: number; content: string; contentType: "text" }) => {
@@ -158,6 +169,8 @@ function App() {
         onClear={clearFilters}
         resultCount={filtered.length}
         totalCount={history.length}
+        advancedFilters={advancedFilters}
+        onAdvancedFilterChange={(u) => setAdvancedFilters(prev => ({ ...prev, ...u }))}
       />
       <ErrorBanner message={errorMsg} />
       <main className="flex-1 overflow-y-auto p-4 space-y-3">

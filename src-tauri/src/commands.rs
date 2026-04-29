@@ -30,6 +30,8 @@ pub struct IngestPayload {
     pub content: String,
     #[serde(default)]
     pub source_app: Option<String>,
+    #[serde(default)]
+    pub metadata: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -50,11 +52,18 @@ pub async fn ingest_clipboard(
     state: State<'_, AppState>,
     payload: IngestPayload,
 ) -> Result<IngestResult, String> {
+    let mut metadata = payload.metadata;
+    if let Some(app_name) = payload.source_app {
+        if !app_name.is_empty() {
+            metadata.insert("sourceApp".to_string(), vec![app_name]);
+        }
+    }
+
     let raw = ClipboardItem {
         content_type: payload.content_type,
         content: payload.content,
-        source_app: payload.source_app,
-        metadata: HashMap::new(),
+        source_app: None,
+        metadata,
         tags: Vec::new(),
     };
 
@@ -289,4 +298,46 @@ pub async fn mark_used(
     .map_err(|e| e.to_string())?;
     emit_changed(&app).await;
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMetadata {
+    pub path: String,
+    pub size: u64,
+}
+
+#[tauri::command]
+pub async fn read_clipboard_files() -> Result<Vec<FileMetadata>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use clipboard_win::{formats, get_clipboard};
+        if let Ok(files) = get_clipboard::<Vec<String>, _>(formats::FileList) {
+            let res = files.into_iter().map(|path| {
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                FileMetadata { path, size }
+            }).collect();
+            return Ok(res);
+        }
+    }
+    Err("No files".to_string())
+}
+
+#[tauri::command]
+pub async fn get_active_window() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW};
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if !hwnd.is_invalid() {
+                let mut buf = [0u16; 512];
+                let len = GetWindowTextW(hwnd, &mut buf);
+                if len > 0 {
+                    return Ok(String::from_utf16_lossy(&buf[..len as usize]));
+                }
+            }
+        }
+    }
+    Err("Not supported".to_string())
 }
