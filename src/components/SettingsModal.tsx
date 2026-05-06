@@ -16,6 +16,12 @@ export function SettingsModal({ onClose }: Props) {
   const [autoPaste, setAutoPaste] = useState(true);
   const [keepWindowOpen, setKeepWindowOpen] = useState(false);
   const [pageSize, setPageSize] = useState(50);
+  
+  // WebDAV
+  const [webdavSyncEnabled, setWebdavSyncEnabled] = useState(false);
+  const [webdavUrl, setWebdavUrl] = useState("");
+  const [webdavUsername, setWebdavUsername] = useState("");
+  const [webdavPassword, setWebdavPassword] = useState("");
 
   useEffect(() => {
     // 获取配置
@@ -28,13 +34,21 @@ export function SettingsModal({ onClose }: Props) {
             if (typeof cfg.autoPaste === 'boolean') setAutoPaste(cfg.autoPaste);
             if (typeof cfg.keepWindowOpen === 'boolean') setKeepWindowOpen(cfg.keepWindowOpen);
             if (typeof cfg.pageSize === 'number') setPageSize(cfg.pageSize);
+            
+            if (typeof cfg.webdavSyncEnabled === 'boolean') setWebdavSyncEnabled(cfg.webdavSyncEnabled);
+            setWebdavUrl(cfg.webdavUrl || "");
+            setWebdavUsername(cfg.webdavUsername || "");
+            setWebdavPassword(cfg.webdavPassword || "");
         }
     }).catch(e => console.error(e));
   }, []);
 
   const handleSave = async () => {
     try {
-        await api.setConfig({ cachePath, shortcut, autoPaste, keepWindowOpen, pageSize });
+        await api.setConfig({ 
+            cachePath, shortcut, autoPaste, keepWindowOpen, pageSize,
+            webdavSyncEnabled, webdavUrl, webdavUsername, webdavPassword
+        });
         await relaunch();
     } catch (e) {
         console.error("Save config error:", e);
@@ -150,6 +164,60 @@ export function SettingsModal({ onClose }: Props) {
               />
               <p className="text-xs text-slate-400">限制列表单页显示的最大条目数，建议保持 50-100 以保证稳定流畅的渲染性能。</p>
             </div>
+          </div>
+
+          <div className="space-y-3 pt-2">
+            <label className="block text-slate-700 font-medium border-b border-slate-100 pb-1">WebDAV 云端同步 (测试版)</label>
+            
+            <label className="flex items-center gap-3 cursor-pointer group">
+              <div className="relative flex items-center">
+                <input 
+                  type="checkbox" 
+                  checked={webdavSyncEnabled}
+                  onChange={e => setWebdavSyncEnabled(e.target.checked)}
+                  className="w-4 h-4 text-blue-500 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
+                />
+              </div>
+              <div>
+                <span className="block text-slate-700 group-hover:text-blue-600 transition-colors">启用 WebDAV 同步</span>
+                <span className="block text-xs text-slate-400">开启后将尝试连线服务器并自动同步您的剪贴板数据与媒体缓存</span>
+              </div>
+            </label>
+
+            {webdavSyncEnabled && (
+              <div className="space-y-3 p-3 bg-slate-50 border border-slate-100 rounded-lg">
+                <div className="space-y-1.5">
+                  <label className="block text-slate-700 text-xs font-medium">服务器地址 (URL)</label>
+                  <input 
+                    type="url" 
+                    value={webdavUrl}
+                    onChange={e => setWebdavUrl(e.target.value)}
+                    placeholder="例如: https://dav.jianguoyun.com/dav/"
+                    className="w-full px-3 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-slate-700 text-xs font-medium">账户 (Username)</label>
+                  <input 
+                    type="text" 
+                    value={webdavUsername}
+                    onChange={e => setWebdavUsername(e.target.value)}
+                    placeholder="您的 WebDAV 账号邮箱"
+                    className="w-full px-3 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-slate-700 text-xs font-medium">应用密码 (Password)</label>
+                  <input 
+                    type="password" 
+                    value={webdavPassword}
+                    onChange={e => setWebdavPassword(e.target.value)}
+                    placeholder="请使用应用授权密码，而非主密码"
+                    className="w-full px-3 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

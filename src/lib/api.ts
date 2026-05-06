@@ -26,7 +26,7 @@ export const api = {
 
   simulatePaste: () => invoke<void>("simulate_paste"),
 
-  getConfig: () => invoke<{ cachePath: string; shortcut: string; defaultDir: string; effectiveDir: string; autoPaste: boolean; keepWindowOpen: boolean; pageSize: number } | null>("get_config").catch(() => null),
+  getConfig: () => invoke<{ cachePath: string; shortcut: string; defaultDir: string; effectiveDir: string; autoPaste: boolean; keepWindowOpen: boolean; pageSize: number; webdavUrl?: string; webdavUsername?: string; webdavPassword?: string; webdavSyncEnabled?: boolean } | null>("get_config").catch(() => null),
 
-  setConfig: (config: { cachePath: string; shortcut: string; autoPaste: boolean; keepWindowOpen: boolean; pageSize: number }) => invoke("set_config", { config }),
+  setConfig: (config: { cachePath: string; shortcut: string; autoPaste: boolean; keepWindowOpen: boolean; pageSize: number; webdavUrl?: string; webdavUsername?: string; webdavPassword?: string; webdavSyncEnabled?: boolean }) => invoke("set_config", { config }),
 };

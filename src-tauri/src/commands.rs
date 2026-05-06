@@ -355,10 +355,20 @@ pub struct AppConfig {
     pub page_size: u32,
     #[serde(default = "default_history_limit")]
     pub history_limit: u32,
+    #[serde(default = "default_string")]
+    pub webdav_url: String,
+    #[serde(default = "default_string")]
+    pub webdav_username: String,
+    #[serde(default = "default_string")]
+    pub webdav_password: String,
+    #[serde(default = "default_bool_false")]
+    pub webdav_sync_enabled: bool,
 }
 
 fn default_auto_paste() -> bool { true }
 fn default_keep_window_open() -> bool { false }
+fn default_bool_false() -> bool { false }
+fn default_string() -> String { "".to_string() }
 fn default_page_size() -> u32 { 50 }
 fn default_history_limit() -> u32 { 5000 }
 
@@ -373,6 +383,10 @@ pub struct ConfigResponse {
     pub keep_window_open: bool,
     pub page_size: u32,
     pub history_limit: u32,
+    pub webdav_url: String,
+    pub webdav_username: String,
+    pub webdav_password: String,
+    pub webdav_sync_enabled: bool,
 }
 
 #[tauri::command]
@@ -386,6 +400,10 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
     let mut keep_window_open = false;
     let mut page_size = 50;
     let mut history_limit = 5000;
+    let mut webdav_url = "".to_string();
+    let mut webdav_username = "".to_string();
+    let mut webdav_password = "".to_string();
+    let mut webdav_sync_enabled = false;
 
     if let Ok(data) = std::fs::read_to_string(&conf_path) {
         if let Ok(conf) = serde_json::from_str::<AppConfig>(&data) {
@@ -395,6 +413,10 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
             keep_window_open = conf.keep_window_open;
             page_size = conf.page_size;
             history_limit = conf.history_limit;
+            webdav_url = conf.webdav_url;
+            webdav_username = conf.webdav_username;
+            webdav_password = conf.webdav_password;
+            webdav_sync_enabled = conf.webdav_sync_enabled;
         }
     }
 
@@ -414,6 +436,10 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
         keep_window_open,
         page_size,
         history_limit,
+        webdav_url,
+        webdav_username,
+        webdav_password,
+        webdav_sync_enabled,
     })
 }
 
