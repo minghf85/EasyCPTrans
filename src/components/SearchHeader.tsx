@@ -3,9 +3,10 @@ import { Search, Settings } from "lucide-react";
 interface Props {
   value: string;
   onChange: (v: string) => void;
+  onSettingsClick?: () => void;
 }
 
-export function SearchHeader({ value, onChange }: Props) {
+export function SearchHeader({ value, onChange, onSettingsClick }: Props) {
   return (
     <header
       className="flex items-center px-4 py-3 bg-white shadow-sm z-10 sticky top-0"
@@ -21,7 +22,10 @@ export function SearchHeader({ value, onChange }: Props) {
           onChange={(e) => onChange(e.target.value)}
         />
       </div>
-      <button className="ml-3 p-1.5 rounded-md hover:bg-slate-100 text-slate-500 transition-colors">
+      <button
+        className="ml-3 p-1.5 rounded-md hover:bg-slate-100 text-slate-500 transition-colors"
+        onClick={onSettingsClick}
+      >
         <Settings className="w-5 h-5" />
       </button>
     </header>

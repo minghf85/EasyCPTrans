@@ -9,6 +9,8 @@ import {
   Tag,
   X,
   ChevronDown,
+  Clock,
+  Type,
 } from "lucide-react";
 import { useState, useMemo, useEffect, type ComponentType } from "react";
 import { aggregateTags, type Scope, type FilterState } from "../lib/filter";
@@ -67,7 +69,7 @@ function FileMBInput({ value, min, max, onChange, placeholder }: { value: number
       type="number"
       placeholder={placeholder}
       min={0} step="0.01"
-      className="text-xs border border-slate-200 rounded px-1.5 py-1 w-24 outline-none focus:ring-1 focus:ring-blue-400 text-center"
+      className="text-xs font-mono border border-slate-200 rounded-lg px-2 py-1.5 w-full bg-slate-50 outline-none focus:ring-2 focus:ring-amber-500/20 text-center transition-all"
       value={str}
       onChange={(e) => {
         setStr(e.target.value);
@@ -103,7 +105,7 @@ function TextLenInput({ value, min, max, onChange, placeholder }: { value: numbe
       type="number"
       placeholder={placeholder}
       min={min} max={max}
-      className="text-xs border border-slate-200 rounded px-1.5 py-1 w-20 outline-none focus:ring-1 focus:ring-blue-400 text-center"
+      className="text-xs font-mono border border-slate-200 rounded-lg px-2 py-1.5 w-full bg-slate-50 outline-none focus:ring-2 focus:ring-emerald-500/20 text-center transition-all"
       value={str}
       onChange={(e) => {
         setStr(e.target.value);
@@ -177,23 +179,32 @@ export function FilterBar({
   const setTime = (idx: 0 | 1, val: string) => {
     let ts = val ? new Date(val).getTime() : null;
     if (ts !== null) ts = clamp(ts, stats.minTime, stats.maxTime);
-    const newArr = [...(advancedFilters.timeRange || [null, null])] as [number | null, number | null];
-    newArr[idx] = ts;
+    const newArr = [
+      advancedFilters.timeRange?.[0] ?? stats.minTime,
+      advancedFilters.timeRange?.[1] ?? stats.maxTime
+    ] as [number | null, number | null];
+    newArr[idx] = ts ?? (idx === 0 ? stats.minTime : stats.maxTime);
     onAdvancedFilterChange({ timeRange: newArr });
   };
 
   const setText = (idx: 0 | 1, val: number | null) => {
-    const newArr = [...(advancedFilters.textLen || [null, null])] as [number | null, number | null];
-    newArr[idx] = val;
-    onAdvancedFilterChange({ textLen: newArr });
-    if (val !== null && scope !== "text") onScopeChange("text");
+    const newArr = [
+      advancedFilters.textLen?.[0] ?? stats.minText,
+      advancedFilters.textLen?.[1] ?? stats.maxText
+    ] as [number | null, number | null];
+    newArr[idx] = val ?? (idx === 0 ? stats.minText : stats.maxText);
+    onAdvancedFilterChange({ textLen: newArr, fileSize: [null, null] });
+    if (scope !== "text") onScopeChange("text");
   };
 
   const setFile = (idx: 0 | 1, val: number | null) => {
-    const newArr = [...(advancedFilters.fileSize || [null, null])] as [number | null, number | null];
-    newArr[idx] = val;
-    onAdvancedFilterChange({ fileSize: newArr });
-    if (val !== null && scope !== "file") onScopeChange("file");
+    const newArr = [
+      advancedFilters.fileSize?.[0] ?? stats.minFile,
+      advancedFilters.fileSize?.[1] ?? stats.maxFile
+    ] as [number | null, number | null];
+    newArr[idx] = val ?? (idx === 0 ? stats.minFile : stats.maxFile);
+    onAdvancedFilterChange({ fileSize: newArr, textLen: [null, null] });
+    if (scope !== "file") onScopeChange("file");
   };
 
   const isTimeActive = advancedFilters.timeRange?.some(v => v !== null);
@@ -201,7 +212,7 @@ export function FilterBar({
   const isFileActive = advancedFilters.fileSize?.some(v => v !== null);
 
   return (
-    <div className="px-4 py-2 bg-white border-b border-slate-100 space-y-3">
+    <div className="px-4 py-2 bg-white border-b border-slate-100 space-y-3 sticky top-0 z-20">
       <div className="flex items-center gap-1.5 flex-wrap">
         {SCOPES.map(({ value, label, Icon }) => {
           const active = scope === value;
@@ -209,13 +220,13 @@ export function FilterBar({
             <button
               key={value}
               onClick={() => onScopeChange(value)}
-              className={`px-2.5 py-1 rounded-full text-xs flex items-center gap-1 transition-colors ${
+              className={`px-3 py-1.5 rounded-full text-xs flex items-center gap-1.5 transition-all duration-200 ${
                 active
-                  ? "bg-blue-500 text-white"
+                  ? "bg-blue-600 text-white shadow-md shadow-blue-100 scale-105"
                   : "bg-slate-100 text-slate-600 hover:bg-slate-200"
               }`}
             >
-              <Icon className="w-3 h-3" />
+              <Icon className="w-3.5 h-3.5" />
               {label}
             </button>
           );
@@ -243,121 +254,175 @@ export function FilterBar({
         <div className="fixed inset-0 z-40" onClick={() => setOpenDropdown(null)} />
       )}
 
-      <div className="flex flex-wrap gap-3 items-center pl-1 relative z-50">
-        <div className={`relative flex items-center rounded-full border transition-colors ${isTimeActive ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+      <div className="flex flex-wrap gap-2.5 items-center pl-1 relative z-50">
+        {/* 时间筛选 */}
+        <div className="inline-flex items-center h-8 bg-slate-100/80 rounded-full border border-slate-200/60 overflow-hidden">
           <button
             onClick={() => {
               if (isTimeActive) onAdvancedFilterChange({ timeRange: [null, null] });
               else onAdvancedFilterChange({ timeRange: [stats.minTime, stats.maxTime] });
             }}
-            className={`px-3 py-1 flex items-center gap-1.5 rounded-l-full text-xs transition-colors ${isTimeActive ? 'text-indigo-700 font-medium' : 'text-slate-600'}`}
+            className={`px-3 h-full text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-200 outline-none ${
+              isTimeActive 
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-200/50' 
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
           >
-            <span>时间筛选</span>
+            <Clock className="w-3 h-3" />
+            时间
           </button>
-          <div className={`w-px h-4 ${isTimeActive ? 'bg-indigo-200' : 'bg-slate-200'}`}></div>
+          <div className="w-[1px] h-3.5 bg-slate-300/50" />
           <button
             onClick={() => setOpenDropdown(openDropdown === 'time' ? null : 'time')}
-            className={`px-2 py-1 flex items-center justify-center rounded-r-full transition-colors ${isTimeActive ? 'text-indigo-600 hover:bg-indigo-100' : 'text-slate-500 hover:bg-slate-100'}`}
+            className={`px-2 h-full flex items-center transition-colors outline-none ${
+              openDropdown === 'time' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-800'
+            }`}
           >
-            <ChevronDown className={`w-3 h-3 transition-transform ${openDropdown === 'time' ? 'rotate-180' : ''}`} />
+            <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${openDropdown === 'time' ? 'rotate-180' : ''}`} />
           </button>
+
           {openDropdown === 'time' && (
-            <div className="absolute top-full mt-1.5 left-0 bg-white border border-slate-200 rounded-xl shadow-lg p-3 flex items-center gap-2 z-50">
-              <input
-                type="datetime-local"
-                step="1"
-                className="text-xs border border-slate-200 rounded px-1.5 py-1 min-w-[150px] outline-none focus:ring-1 focus:ring-blue-400"
-                min={toDateTimeStr(stats.minTime)} max={toDateTimeStr(stats.maxTime)}
-                value={advancedFilters.timeRange?.[0] ? toDateTimeStr(advancedFilters.timeRange[0]) : ""}
-                onChange={(e) => setTime(0, e.target.value)}
-              />
-              <span className="text-xs text-slate-400">-</span>
-              <input
-                type="datetime-local"
-                step="1"
-                className="text-xs border border-slate-200 rounded px-1.5 py-1 min-w-[150px] outline-none focus:ring-1 focus:ring-blue-400"
-                min={toDateTimeStr(stats.minTime)} max={toDateTimeStr(stats.maxTime)}
-                value={advancedFilters.timeRange?.[1] ? toDateTimeStr(advancedFilters.timeRange[1]) : ""}
-                onChange={(e) => setTime(1, e.target.value)}
-              />
+            <div className="absolute top-full left-0 mt-2 bg-white rounded-xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.1)] border border-slate-200 p-4 min-w-[280px] animate-in fade-in zoom-in-95 duration-150 origin-top-left">
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] uppercase tracking-wider font-bold text-slate-400">起始</label>
+                  <input
+                    type="datetime-local" step="1"
+                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                    value={toDateTimeStr(advancedFilters.timeRange?.[0] ?? stats.minTime)}
+                    onChange={(e) => setTime(0, e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] uppercase tracking-wider font-bold text-slate-400">至</label>
+                  <input
+                    type="datetime-local" step="1"
+                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                    value={toDateTimeStr(advancedFilters.timeRange?.[1] ?? stats.maxTime)}
+                    onChange={(e) => setTime(1, e.target.value)}
+                  />
+                </div>
+              </div>
             </div>
           )}
         </div>
 
-        <div className={`relative flex items-center rounded-full border transition-colors ${isTextActive ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+        {/* 长度筛选 */}
+        <div className="inline-flex items-center h-8 bg-slate-100/80 rounded-full border border-slate-200/60 overflow-hidden">
           <button
             onClick={() => {
-              if (isTextActive) onAdvancedFilterChange({ textLen: [null, null] });
-              else {
-                onAdvancedFilterChange({ textLen: [stats.minText, stats.maxText] });
+              if (isTextActive) {
+                onAdvancedFilterChange({ textLen: [null, null] });
+              } else {
+                onAdvancedFilterChange({ 
+                  textLen: [stats.minText, stats.maxText],
+                  fileSize: [null, null] // 互斥逻辑
+                });
                 if (scope !== "text") onScopeChange("text");
               }
             }}
-            className={`px-3 py-1 flex items-center gap-1.5 rounded-l-full text-xs transition-colors ${isTextActive ? 'text-indigo-700 font-medium' : 'text-slate-600'}`}
+            className={`px-3 h-full text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-200 outline-none ${
+              isTextActive 
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-200/50' 
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
           >
-            <span>文本字数</span>
+            <Type className="w-3 h-3" />
+            长度
           </button>
-          <div className={`w-px h-4 ${isTextActive ? 'bg-indigo-200' : 'bg-slate-200'}`}></div>
+          <div className="w-[1px] h-3.5 bg-slate-300/50" />
           <button
             onClick={() => setOpenDropdown(openDropdown === 'text' ? null : 'text')}
-            className={`px-2 py-1 flex items-center justify-center rounded-r-full transition-colors ${isTextActive ? 'text-indigo-600 hover:bg-indigo-100' : 'text-slate-500 hover:bg-slate-100'}`}
+            className={`px-2 h-full flex items-center transition-colors outline-none ${
+              openDropdown === 'text' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-800'
+            }`}
           >
-            <ChevronDown className={`w-3 h-3 transition-transform ${openDropdown === 'text' ? 'rotate-180' : ''}`} />
+            <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${openDropdown === 'text' ? 'rotate-180' : ''}`} />
           </button>
+
           {openDropdown === 'text' && (
-            <div className="absolute top-full mt-1.5 left-0 bg-white border border-slate-200 rounded-xl shadow-lg p-3 flex items-center gap-2 z-50">
-              <TextLenInput
-                value={advancedFilters.textLen?.[0] ?? null}
-                min={stats.minText} max={stats.maxText}
-                placeholder={String(stats.minText)}
-                onChange={(v) => setText(0, v)}
-              />
-              <span className="text-xs text-slate-400">-</span>
-              <TextLenInput
-                value={advancedFilters.textLen?.[1] ?? null}
-                min={stats.minText} max={stats.maxText}
-                placeholder={String(stats.maxText)}
-                onChange={(v) => setText(1, v)}
-              />
+            <div className="absolute top-full left-0 mt-2 bg-white rounded-xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.1)] border border-slate-200 p-4 min-w-[220px] animate-in fade-in zoom-in-95 duration-150 origin-top-left">
+              <div className="flex items-center justify-between gap-3">
+                <div className="space-y-1.5 flex-1 text-center">
+                  <label className="text-[10px] uppercase font-bold text-slate-400">最小</label>
+                  <TextLenInput
+                    value={advancedFilters.textLen?.[0] ?? stats.minText}
+                    min={stats.minText} max={stats.maxText}
+                    placeholder={String(stats.minText)}
+                    onChange={(v) => setText(0, v)}
+                  />
+                </div>
+                <div className="w-2 h-[1px] bg-slate-200 mt-6" />
+                <div className="space-y-1.5 flex-1 text-center">
+                  <label className="text-[10px] uppercase font-bold text-slate-400">最大</label>
+                  <TextLenInput
+                    value={advancedFilters.textLen?.[1] ?? stats.maxText}
+                    min={stats.minText} max={stats.maxText}
+                    placeholder={String(stats.maxText)}
+                    onChange={(v) => setText(1, v)}
+                  />
+                </div>
+              </div>
             </div>
           )}
         </div>
 
-        <div className={`relative flex items-center rounded-full border transition-colors ${isFileActive ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+        {/* 大小筛选 */}
+        <div className="inline-flex items-center h-8 bg-slate-100/80 rounded-full border border-slate-200/60 overflow-hidden">
           <button
             onClick={() => {
-              if (isFileActive) onAdvancedFilterChange({ fileSize: [null, null] });
-              else {
-                onAdvancedFilterChange({ fileSize: [stats.minFile, stats.maxFile] });
+              if (isFileActive) {
+                onAdvancedFilterChange({ fileSize: [null, null] });
+              } else {
+                onAdvancedFilterChange({ 
+                  fileSize: [stats.minFile, stats.maxFile],
+                  textLen: [null, null] // 互斥逻辑
+                });
                 if (scope !== "file") onScopeChange("file");
               }
             }}
-            className={`px-3 py-1 flex items-center gap-1.5 rounded-l-full text-xs transition-colors ${isFileActive ? 'text-indigo-700 font-medium' : 'text-slate-600'}`}
+            className={`px-3 h-full text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-200 outline-none ${
+              isFileActive 
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-200/50' 
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
           >
-            <span>文件大小 (MB)</span>
+            <FileText className="w-3 h-3" />
+            大小
           </button>
-          <div className={`w-px h-4 ${isFileActive ? 'bg-indigo-200' : 'bg-slate-200'}`}></div>
+          <div className="w-[1px] h-3.5 bg-slate-300/50" />
           <button
             onClick={() => setOpenDropdown(openDropdown === 'file' ? null : 'file')}
-            className={`px-2 py-1 flex items-center justify-center rounded-r-full transition-colors ${isFileActive ? 'text-indigo-600 hover:bg-indigo-100' : 'text-slate-500 hover:bg-slate-100'}`}
+            className={`px-2 h-full flex items-center transition-colors outline-none ${
+              openDropdown === 'file' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-800'
+            }`}
           >
-            <ChevronDown className={`w-3 h-3 transition-transform ${openDropdown === 'file' ? 'rotate-180' : ''}`} />
+            <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${openDropdown === 'file' ? 'rotate-180' : ''}`} />
           </button>
+
           {openDropdown === 'file' && (
-            <div className="absolute top-full mt-1.5 left-0 bg-white border border-slate-200 rounded-xl shadow-lg p-3 flex items-center gap-2 z-50">
-              <FileMBInput
-                value={advancedFilters.fileSize?.[0] ?? null}
-                min={stats.minFile} max={stats.maxFile}
-                placeholder={(stats.minFile / 1048576).toFixed(2)}
-                onChange={(v) => setFile(0, v)}
-              />
-              <span className="text-xs text-slate-400">-</span>
-              <FileMBInput
-                value={advancedFilters.fileSize?.[1] ?? null}
-                min={stats.minFile} max={stats.maxFile}
-                placeholder={(stats.maxFile / 1048576).toFixed(2)}
-                onChange={(v) => setFile(1, v)}
-              />
+            <div className="absolute top-full left-0 mt-2 bg-white rounded-xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.1)] border border-slate-200 p-4 min-w-[240px] animate-in fade-in zoom-in-95 duration-150 origin-top-left">
+              <div className="flex items-center gap-3">
+                <div className="flex-1 space-y-1.5 text-center">
+                  <label className="text-[10px] uppercase font-bold text-slate-400">最小 (MB)</label>
+                  <FileMBInput
+                    value={advancedFilters.fileSize?.[0] ?? stats.minFile}
+                    min={stats.minFile} max={stats.maxFile}
+                    placeholder={(stats.minFile / 1048576).toFixed(2)}
+                    onChange={(v) => setFile(0, v)}
+                  />
+                </div>
+                <div className="w-2 h-[1px] bg-slate-200 mt-6" />
+                <div className="flex-1 space-y-1.5 text-center">
+                  <label className="text-[10px] uppercase font-bold text-slate-400">最大 (MB)</label>
+                  <FileMBInput
+                    value={advancedFilters.fileSize?.[1] ?? stats.maxFile}
+                    min={stats.minFile} max={stats.maxFile}
+                    placeholder={(stats.maxFile / 1048576).toFixed(2)}
+                    onChange={(v) => setFile(1, v)}
+                  />
+                </div>
+              </div>
             </div>
           )}
         </div>

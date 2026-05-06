@@ -3,7 +3,7 @@ import type { HistoryItem, IngestResult } from "../types";
 
 // 单一入口封装所有 Rust 命令调用，方便集中替换/Mock。
 export const api = {
-  loadHistory: (limit = 100) =>
+  loadHistory: (limit = 5000) =>
     invoke<HistoryItem[]>("load_history", { limit }),
 
   ingest: (contentType: string, content: string, metadata?: Record<string, string[]>, sourceApp?: string) =>
@@ -25,4 +25,8 @@ export const api = {
   markUsed: (id: number) => invoke<void>("mark_used", { id }),
 
   simulatePaste: () => invoke<void>("simulate_paste"),
+
+  getConfig: () => invoke<{ cachePath: string; shortcut: string; defaultDir: string; effectiveDir: string; autoPaste: boolean; keepWindowOpen: boolean; pageSize: number } | null>("get_config").catch(() => null),
+
+  setConfig: (config: { cachePath: string; shortcut: string; autoPaste: boolean; keepWindowOpen: boolean; pageSize: number }) => invoke("set_config", { config }),
 };

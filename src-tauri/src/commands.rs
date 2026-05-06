@@ -3,7 +3,7 @@ use crate::pipeline::{ClipboardItem, Pipeline, PipelineOutcome};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::HashMap;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 // --- helpers ----------------------------------------------------------------
 
@@ -168,7 +168,7 @@ pub async fn load_history(
     state: State<'_, AppState>,
     limit: Option<i64>,
 ) -> Result<Vec<HistoryItem>, String> {
-    let limit = limit.unwrap_or(100).clamp(1, 1000);
+    let limit = limit.unwrap_or(5000).clamp(1, 10000);
     let rows = sqlx::query(
         "SELECT id, content_type, preview_text, storage_path, created_at, last_used_at,
                 use_count, is_pinned, tags, metadata
@@ -340,4 +340,87 @@ pub async fn get_active_window() -> Result<String, String> {
         }
     }
     Err("Not supported".to_string())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppConfig {
+    pub cache_path: String,
+    pub shortcut: String,
+    #[serde(default = "default_auto_paste")]
+    pub auto_paste: bool,
+    #[serde(default = "default_keep_window_open")]
+    pub keep_window_open: bool,
+    #[serde(default = "default_page_size")]
+    pub page_size: u32,
+    #[serde(default = "default_history_limit")]
+    pub history_limit: u32,
+}
+
+fn default_auto_paste() -> bool { true }
+fn default_keep_window_open() -> bool { false }
+fn default_page_size() -> u32 { 50 }
+fn default_history_limit() -> u32 { 5000 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigResponse {
+    pub cache_path: String,
+    pub shortcut: String,
+    pub default_dir: String,
+    pub effective_dir: String,
+    pub auto_paste: bool,
+    pub keep_window_open: bool,
+    pub page_size: u32,
+    pub history_limit: u32,
+}
+
+#[tauri::command]
+pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
+    let app_data = app.path().app_data_dir().unwrap();
+    let conf_path = app_data.join("config.json");
+    
+    let mut cache_path = "".to_string();
+    let mut shortcut = "CommandOrControl+Shift+E".to_string();
+    let mut auto_paste = true;
+    let mut keep_window_open = false;
+    let mut page_size = 50;
+    let mut history_limit = 5000;
+
+    if let Ok(data) = std::fs::read_to_string(&conf_path) {
+        if let Ok(conf) = serde_json::from_str::<AppConfig>(&data) {
+            cache_path = conf.cache_path;
+            shortcut = conf.shortcut;
+            auto_paste = conf.auto_paste;
+            keep_window_open = conf.keep_window_open;
+            page_size = conf.page_size;
+            history_limit = conf.history_limit;
+        }
+    }
+
+    let default_dir = app_data.to_string_lossy().to_string();
+    let effective_dir = if cache_path.is_empty() {
+        default_dir.clone()
+    } else {
+        cache_path.clone()
+    };
+
+    Ok(ConfigResponse {
+        cache_path,
+        shortcut,
+        default_dir,
+        effective_dir,
+        auto_paste,
+        keep_window_open,
+        page_size,
+        history_limit,
+    })
+}
+
+#[tauri::command]
+pub async fn set_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
+    let conf_path = app.path().app_data_dir().unwrap().join("config.json");
+    let data = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+    std::fs::write(&conf_path, data).map_err(|e| e.to_string())?;
+    Ok(())
 }

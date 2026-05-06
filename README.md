@@ -1,15 +1,16 @@
-# EasyCut - 智能剪贴板管理工具
+# EasyCP - 智能剪贴板管理工具
 
-EasyCut 是一款基于 Tauri v2 + React 开源的跨平台剪贴板历史管理工具。它能自动监控系统剪贴板（支持文本和图片），持久化存储到本地 SQLite 数据库，并支持一键搜索、标签分类和跨应用自动粘贴。
+EasyCP 是一款基于 Tauri v2 + React 开源的跨平台剪贴板历史管理工具。它能自动监控系统剪贴板（支持文本和图片），持久化存储到本地 SQLite 数据库，并支持一键搜索、标签分类和跨应用自动粘贴。
 
 ## 🎯 核心特性
 
-- **多媒体支持**：自动拦截并记录剪贴板中的纯文本与图像，支持高分辨率图片自动压缩与快速预览缓存。
+- **多模态全栖支持**：除纯文本与图像外，现已全面支持基于文件（视频、音频、文档等）的剪贴板捕获，并自动解析文件尺寸与多媒体信息。
+- **正则模式与子信息提取**：后端处理管道支持通过正则表达式从海量文本中智能提取 URL、Email、手机号、IP 等关键实体信息，并在 UI 侧以智能气泡呈现，方便一键快捷交互。
+- **来源应用追踪**：在 Windows 等环境下调用原生 API 追踪“谁复制了这条记录”，支持通过拷贝来源的软件名称进行全局检索。
+- **高阶范围过滤机制 (Advanced Filters)**：支持在 UI 侧使用精密的分体式交互气泡，针对“时间（精确到秒）”、“文本长度（字级）”、“文件大小（MB级）”等维度进行连续区间筛选。
 - **全局快捷键唤醒**：随时通过 `Ctrl+Shift+E` (或 `Cmd+Shift+E`) 快捷键唤出主界面。
 - **自动粘贴（Auto Paste）**：点击任意历史记录后，窗口自动隐藏并向之前的应用程序模拟发送原生的 `Ctrl+V` (或 `Cmd+V`) 粘贴事件。
 - **本地持久化存储**：基于 `@tauri-apps/plugin-sql` 的 SQLite 高效存储，支持 `last_used_at` 排序、固定（Pin）以及使用频率统计。
-- **标签系统与搜索引擎**：对历史记录添加自定义 Tag，支持多重维度模糊搜索。
-- **低开销架构**：独创的 “尺寸哈希比对” 算法，大幅降低剪贴板轮询期间图像比对时的进程间通讯 (IPC) 与内存开销。
 
 ---
 
@@ -18,7 +19,7 @@ EasyCut 是一款基于 Tauri v2 + React 开源的跨平台剪贴板历史管理
 项目采用典型的前后端分离架构，前端完全使用 React + TypeScript 渲染，通过 Tauri 暴露的 Rust Commands 桥接系统级 API。
 
 ```text
-EasyCut/
+EasyCP/
 ├── package.json             # 前端依赖配置
 ├── vite.config.ts           # Vite 构建配置
 ├── src/                     # ========== 前端代码 (React) ==========
@@ -88,10 +89,13 @@ EasyCut/
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | INTEGER | 自动递增主键 |
-| `content_type` | TEXT | 数据类型，如 `text` 或 `image` |
+| `content_type` | TEXT | 数据类型，如 `text`, `image`, `file`, `video`, `audio` |
 | `content_hash` | TEXT | (可选) 哈希值，用于快速比对去重 |
 | `storage_path`| TEXT | 本地文件或高压缩图片数据缓存路径/DataUrl |
-| `preview_text`| TEXT | 文本形式的内容实体存放处 |
+| `preview_text`| TEXT | 文本形式的内容实体存放处，或多媒体文件短描述 |
+| `source_app`  | TEXT | 提取自当前焦点的宿主应用名称 (如 `Code.exe` 或 `Chrome`) |
+| `file_info`   | TEXT | (JSON) 保存文件大小 `file_size`、分辨率、时长等元信息 |
+| `extracted`   | TEXT | (JSON) 通过 Pipeline 正则挖掘提取出的 `urls` / `emails` 数组集合 |
 | `tags` | TEXT | JSON 序列化的分类标签数组 (如 `["code", "image"]`) |
 | `use_count` | INTEGER | 该记录被应用/重复拷贝的统计次数 (默认为 0) |
 | `is_pinned` | BOOLEAN | 是否置顶锁定不被清理 |
