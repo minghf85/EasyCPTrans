@@ -6,6 +6,7 @@ export interface HistoryItem {
   lastUsedAt: string | null;
   useCount: number;
   pinned: boolean;
+  isPrivate: boolean;
   tags: string[];
   metadata: Record<string, string[]>;
 }

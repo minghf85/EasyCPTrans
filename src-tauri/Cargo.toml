@@ -33,7 +33,12 @@ clipboard-win = "5.4.1"
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-process = "2.3.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+chrono = { version = "0.4", features = ["serde"] }
+aes-gcm = "0.10"
+argon2 = "0.5"
+base64 = "0.22"
+rand = "0.8"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
-

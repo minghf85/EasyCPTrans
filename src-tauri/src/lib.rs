@@ -5,6 +5,8 @@ use tauri::Manager;
 mod commands;
 mod db;
 mod pipeline;
+mod privacy;
+mod sync;
 
 #[tauri::command]
 fn simulate_paste() {
@@ -88,12 +90,20 @@ pub fn run() {
             commands::read_clipboard_files,
             commands::get_active_window,
             commands::load_history,
+            commands::get_text_item,
+            commands::get_privacy_status,
+            commands::set_privacy_password,
+            commands::protect_item,
+            commands::unprotect_item,
             commands::toggle_pin,
             commands::delete_item,
             commands::set_tags,
             commands::mark_used,
+            commands::update_text_item,
             commands::get_config,
-            commands::set_config
+            commands::set_config,
+            sync::trigger_sync,
+            sync::verify_webdav
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

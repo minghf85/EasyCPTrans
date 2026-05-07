@@ -1,4 +1,4 @@
-import { Check, Clock, Copy, Link, Mail, Phone, Pin, Plus, Trash2, Monitor } from "lucide-react";
+import { Check, Clock, Copy, EyeOff, Link, Mail, Monitor, PenSquare, Phone, Pin, Plus, Trash2 } from "lucide-react";
 import { formatTime } from "../lib/time";
 import type { HistoryItem } from "../types";
 import { TagsRow } from "./TagsRow";
@@ -107,9 +107,12 @@ interface Props {
   onDelete: (id: number) => void;
   onAddTag: (id: number, tag: string) => void;
   onRemoveTag: (id: number, tag: string) => void;
+  onEnablePrivacy: (id: number) => void;
+  onDisablePrivacy: (id: number) => void;
   onStartTag: (id: number) => void;
   onStopTag: () => void;
   onTagInputChange: (v: string) => void;
+  onQuickEdit: (item: HistoryItem) => void;
   onIngestExtract?: (content: string) => void;
 }
 
@@ -124,11 +127,16 @@ export function ClipboardCard({
   onDelete,
   onAddTag,
   onRemoveTag,
+  onEnablePrivacy,
+  onDisablePrivacy,
   onStartTag,
   onStopTag,
   onTagInputChange,
+  onQuickEdit,
   onIngestExtract,
 }: Props) {
+  const hasPrivacy = item.isPrivate;
+
   const commitTag = () => {
     const trimmed = tagInput.trim();
     if (trimmed) onAddTag(item.id, trimmed);
@@ -143,21 +151,44 @@ export function ClipboardCard({
       {/* 内容 */}
       <div className="text-sm font-medium text-slate-700 line-clamp-3 mb-2">
         {item.contentType === "text" && (
-          item.content
+          <div
+            className={
+              hasPrivacy
+                ? "blur-md select-none tracking-wide text-slate-500"
+                : ""
+            }
+          >
+            {item.content}
+          </div>
         )}
         {item.contentType === "image" && (
           <div className="flex justify-center bg-slate-100 rounded-md p-1">
-            <img
-              src={item.content}
-              alt="Clipboard content"
-              className="max-h-32 max-w-full object-contain shadow-sm"
-            />
+            {hasPrivacy || !item.content ? (
+              <div className="h-24 w-full flex items-center justify-center text-xs text-slate-500">
+                [已加密图片]
+              </div>
+            ) : (
+              <img
+                src={item.content}
+                alt="Clipboard content"
+                className="max-h-32 max-w-full object-contain shadow-sm transition-all"
+              />
+            )}
           </div>
         )}
         {item.contentType === "file" && (
-          <div className="flex flex-col space-y-1 text-sm bg-slate-50 p-2 rounded border border-slate-100">
+          <div
+            className={`flex flex-col space-y-1 text-sm bg-slate-50 p-2 rounded border border-slate-100 ${
+              hasPrivacy ? "select-none" : ""
+            }`}
+          >
             {item.content.split("\n").map((line, idx) => (
-              <div key={idx} className="flex flex-row items-center text-slate-600 truncate">
+              <div
+                key={idx}
+                className={`flex flex-row items-center text-slate-600 truncate ${
+                  hasPrivacy ? "blur-md text-slate-500" : ""
+                }`}
+              >
                 <span className="truncate flex-1">{line}</span>
                 {item.metadata?.sizes && item.metadata.sizes[idx] && (
                   <span className="ml-2 text-xs text-slate-400 shrink-0">
@@ -170,7 +201,7 @@ export function ClipboardCard({
         )}
       </div>
 
-      {showExtracts && item.contentType === "text" && (
+      {showExtracts && item.contentType === "text" && !hasPrivacy && (
         <div className="flex flex-wrap gap-2 mb-2">
           {extractInfo(item.content).map((extract, idx) => (
             <div
@@ -239,6 +270,31 @@ export function ClipboardCard({
         </div>
 
         <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          {item.contentType === "text" && !hasPrivacy && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onQuickEdit(item);
+              }}
+              className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-indigo-500"
+              title="快速编辑"
+            >
+              <PenSquare className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (hasPrivacy) onDisablePrivacy(item.id);
+                else onEnablePrivacy(item.id);
+              }}
+            className={`p-1.5 rounded hover:bg-slate-100 ${
+              hasPrivacy ? "text-amber-500" : "text-slate-400 hover:text-amber-500"
+            }`}
+            title={hasPrivacy ? "输入密码解密并移除隐私" : "添加隐私标签（无需输入密码）"}
+          >
+            <EyeOff className="w-3.5 h-3.5" />
+          </button>
           <button
             onClick={(e) => {
               e.stopPropagation();

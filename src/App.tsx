@@ -8,6 +8,8 @@ import { ClipboardCard } from "./components/ClipboardCard";
 import { EmptyState } from "./components/EmptyState";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { FilterBar } from "./components/FilterBar";
+import { PasswordPromptModal } from "./components/PasswordPromptModal";
+import { QuickTextEditorPage } from "./components/QuickTextEditorPage";
 import { SearchHeader } from "./components/SearchHeader";
 import { SettingsModal } from "./components/SettingsModal";
 import { useClipboardWatcher, setInjectedOverrideSig } from "./hooks/useClipboardWatcher";
@@ -26,7 +28,7 @@ import type { HistoryItem } from "./types";
 const POLL_INTERVAL_MS = 500;
 const DEFAULT_SHORTCUT = "CommandOrControl+Shift+E";
 
-function App() {
+function MainApp() {
   const [search, setSearch] = useState("");
   const [scope, setScope] = useState<Scope>("all");
   const [advancedFilters, setAdvancedFilters] = useState<Partial<FilterState>>({
@@ -45,6 +47,10 @@ function App() {
   const [keepWindowOpen, setKeepWindowOpen] = useState(false);
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(0);
+  const [privacyAction, setPrivacyAction] = useState<{ id: number } | null>(null);
+  const [privacyBusy, setPrivacyBusy] = useState(false);
+  const [privacyError, setPrivacyError] = useState<string | null>(null);
+  const [sessionPrivacyPassword, setSessionPrivacyPassword] = useState<string | null>(null);
 
   // Reset page when filters change
   useEffect(() => {
@@ -94,6 +100,11 @@ function App() {
 
   const handleCopy = async (item: HistoryItem | { id: number; content: string; contentType: "text" }) => {
     try {
+      if ("isPrivate" in item && item.isPrivate) {
+        setErrorMsg("该条目已加密，请先使用隐私按钮解密后再复制。");
+        return;
+      }
+
       if (item.contentType === "text") {
         await writeText(item.content);
         setInjectedOverrideSig(item.content);
@@ -182,6 +193,77 @@ function App() {
   const stopTag = () => {
     setTaggingId(null);
     setTagInput("");
+  };
+
+  const handleSettingsSaved = (settings: {
+    shortcut: string;
+    autoPaste: boolean;
+    keepWindowOpen: boolean;
+    pageSize: number;
+  }) => {
+    setShortcut(settings.shortcut || DEFAULT_SHORTCUT);
+    setAutoPaste(settings.autoPaste);
+    setKeepWindowOpen(settings.keepWindowOpen);
+    setPageSize(settings.pageSize);
+    setPage(0);
+  };
+
+  const handleQuickEdit = (item: HistoryItem) => {
+    if (item.contentType !== "text") return;
+    window.location.hash = `/quick-edit?id=${item.id}`;
+  };
+
+  const handleEnablePrivacy = async (id: number) => {
+    setPrivacyError(null);
+    try {
+      await api.protectItem(id);
+    } catch (err) {
+      setErrorMsg("开启隐私失败: " + String(err));
+    }
+  };
+
+  const handleDisablePrivacy = (id: number) => {
+    setPrivacyError(null);
+    if (sessionPrivacyPassword) {
+      setPrivacyBusy(true);
+      api.unprotectItem(id, sessionPrivacyPassword)
+        .catch((err) => {
+          const msg = String(err);
+          const isPasswordIssue = msg.includes("隐私密码错误") || msg.includes("解密失败");
+          if (isPasswordIssue) {
+            // 会话密码已失效（例如设置里修改了密码），要求重新输入一次
+            setSessionPrivacyPassword(null);
+            setPrivacyError("会话密码已失效，请重新输入隐私密码。");
+            setPrivacyAction({ id });
+            return;
+          }
+          setErrorMsg("隐私操作失败: " + msg);
+        })
+        .finally(() => {
+          setPrivacyBusy(false);
+        });
+      return;
+    }
+    setPrivacyAction({ id });
+  };
+
+  const handlePrivacyConfirm = async (password: string) => {
+    if (!privacyAction) return;
+    const passwordToUse = password.trim();
+    if (!passwordToUse) return;
+    setPrivacyBusy(true);
+    setPrivacyError(null);
+    try {
+      await api.unprotectItem(privacyAction.id, passwordToUse);
+      setSessionPrivacyPassword(passwordToUse);
+      setPrivacyAction(null);
+    } catch (err) {
+      const msg = String(err);
+      setPrivacyError(msg);
+      setErrorMsg("隐私操作失败: " + msg);
+    } finally {
+      setPrivacyBusy(false);
+    }
   };
 
   return (
@@ -279,9 +361,12 @@ function App() {
                 onDelete={handleDelete}
                 onAddTag={handleAddTag}
                 onRemoveTag={handleRemoveTag}
+                onEnablePrivacy={handleEnablePrivacy}
+                onDisablePrivacy={handleDisablePrivacy}
                 onStartTag={startTag}
                 onStopTag={stopTag}
                 onTagInputChange={setTagInput}
+                onQuickEdit={handleQuickEdit}
                 onIngestExtract={async (content) => {
                   try {
                     await api.ingest("text", content);
@@ -296,7 +381,24 @@ function App() {
         )}
       </main>
       {showSettings && (
-        <SettingsModal onClose={() => setShowSettings(false)} />
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          onSaved={handleSettingsSaved}
+        />
+      )}
+      {privacyAction && (
+        <PasswordPromptModal
+          title="解密隐私内容"
+          description="本次启动输入一次隐私密码后，后续解密会自动复用，重启应用后需重新输入。"
+          confirmText="解密"
+          busy={privacyBusy}
+          error={privacyError}
+          onClose={() => {
+            if (privacyBusy) return;
+            setPrivacyAction(null);
+          }}
+          onConfirm={handlePrivacyConfirm}
+        />
       )}
     </div>
   );
@@ -325,4 +427,36 @@ async function writeImageDataUrl(dataUrl: string): Promise<{ width: number; heig
   return { width: htmlImg.width, height: htmlImg.height };
 }
 
-export default App;
+function parseQuickEditRoute(hash: string): { matched: boolean; itemId: number | null } {
+  const normalized = hash.startsWith("#") ? hash.slice(1) : hash;
+  const [path, queryString = ""] = normalized.split("?");
+  if (path !== "/quick-edit") {
+    return { matched: false, itemId: null };
+  }
+  const params = new URLSearchParams(queryString);
+  const id = Number(params.get("id"));
+  if (!Number.isFinite(id) || id <= 0) {
+    return { matched: true, itemId: null };
+  }
+  return { matched: true, itemId: id };
+}
+
+export default function App() {
+  const [hash, setHash] = useState(() => window.location.hash || "");
+
+  useEffect(() => {
+    const onHashChange = () => {
+      setHash(window.location.hash || "");
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      window.removeEventListener("hashchange", onHashChange);
+    };
+  }, []);
+
+  const route = parseQuickEditRoute(hash);
+  if (route.matched) {
+    return <QuickTextEditorPage itemId={route.itemId} />;
+  }
+  return <MainApp />;
+}
