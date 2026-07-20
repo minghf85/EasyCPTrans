@@ -46,6 +46,7 @@ fn parse_config(app: &AppHandle) -> Result<AppConfig, String> {
                 webdav_password: "".to_string(),
                 webdav_sync_enabled: false,
                 device_name: "This Device".to_string(),
+                managed_tags: Vec::new(),
                 window_width: None,
                 window_height: None,
                 window_x: None,
@@ -421,10 +422,6 @@ pub async fn run_sync(app: AppHandle) -> Result<(), String> {
         let _ = app.emit("clipboard-changed", ());
     }
     Ok(())
-}
-
-pub async fn run_startup_sync(app: AppHandle) -> Result<(), String> {
-    run_sync(app).await
 }
 
 #[tauri::command]

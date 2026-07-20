@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { writeImage, writeText } from "tauri-plugin-clipboard-next-api";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  CheckSquare,
   ChevronLeft,
   ChevronRight,
   Ellipsis,
@@ -10,8 +11,10 @@ import {
   FileText,
   Files,
   Link2,
+  Tags,
   Search,
   Settings2,
+  Square,
   Star,
 } from "lucide-react";
 import "./App.css";
@@ -22,6 +25,7 @@ import { ErrorBanner } from "./components/ErrorBanner";
 import { PasswordPromptModal } from "./components/PasswordPromptModal";
 import { QuickTextEditorPage } from "./components/QuickTextEditorPage";
 import { SettingsModal } from "./components/SettingsModal";
+import { TagManagementPage } from "./components/TagManagementPage";
 import { useClipboardWatcher, setInjectedOverrideSig } from "./hooks/useClipboardWatcher";
 import { useGlobalShortcut } from "./hooks/useGlobalShortcut";
 import { useHistory } from "./hooks/useHistory";
@@ -34,31 +38,72 @@ import {
   type FilterState,
   type Scope,
 } from "./lib/filter";
-import { mockHistory } from "./lib/mock";
-import type { HistoryItem } from "./types";
+import type { HistoryItem, ManagedTag } from "./types";
 
 const DEFAULT_SHORTCUT = "CommandOrControl+Shift+E";
-const TAB_LIST: Array<{
-  key: Scope | "settings";
+const DEFAULT_TAG_COLOR = "#0f6cbd";
+const SYSTEM_TAGS: Array<ManagedTag & { key: ActiveView }> = [
+  { id: "sys-text", name: "Text", common: true, color: "#0078d4", system: true, key: "text" },
+  { id: "sys-image", name: "Image", common: true, color: "#107c10", system: true, key: "image" },
+  { id: "sys-file", name: "File", common: true, color: "#7b4f9d", system: true, key: "file" },
+];
+const LEGACY_SYSTEM_TAG_IDS = new Set(["sys-pinned", "sys-url", "sys-code"]);
+const LEGACY_SYSTEM_TAG_NAMES = new Set(["important", "links", "code"]);
+const BASE_TAB_LIST: Array<{
+  key: Scope;
   label: string;
   dotClass: string;
   icon: typeof FileText;
 }> = [
   { key: "all", label: "All", dotClass: "dot-all", icon: FileText },
-  { key: "text", label: "Text", dotClass: "dot-text", icon: FileText },
-  { key: "image", label: "Images", dotClass: "dot-images", icon: FileImage },
-  { key: "file", label: "Files", dotClass: "dot-files", icon: Files },
-  { key: "pinned", label: "Important", dotClass: "dot-important", icon: Star },
-  { key: "url", label: "Links", dotClass: "dot-links", icon: Link2 },
-  { key: "code", label: "Code", dotClass: "dot-code", icon: FileCode2 },
-  { key: "settings", label: "Settings", dotClass: "dot-settings", icon: Settings2 },
 ];
 
+type ActiveView = Scope | "tag-selector" | "tag-manager" | "settings" | `tag:${string}`;
+
+function sanitizeManagedTags(tags: ManagedTag[]) {
+  const normalized = new Map<string, ManagedTag>();
+
+  for (const tag of tags) {
+    const trimmedName = tag.name.trim();
+    if (!trimmedName) continue;
+
+    const lowerId = tag.id?.toLowerCase() ?? "";
+    const lowerName = trimmedName.toLowerCase();
+
+    if (LEGACY_SYSTEM_TAG_IDS.has(lowerId) || LEGACY_SYSTEM_TAG_NAMES.has(lowerName)) {
+      continue;
+    }
+
+    let next: ManagedTag = {
+      id: tag.id,
+      name: trimmedName,
+      common: Boolean(tag.common),
+      color: tag.color?.trim() || DEFAULT_TAG_COLOR,
+      system: Boolean(tag.system),
+    };
+
+    if (lowerId === "sys-text" || lowerName === "text") {
+      next = { ...next, id: "sys-text", name: "Text", system: true };
+    } else if (lowerId === "sys-image" || lowerName === "images" || lowerName === "image") {
+      next = { ...next, id: "sys-image", name: "Image", system: true };
+    } else if (lowerId === "sys-file" || lowerName === "files" || lowerName === "file") {
+      next = { ...next, id: "sys-file", name: "File", system: true };
+    } else if (next.system) {
+      next = { ...next, id: undefined, system: false };
+    }
+
+    normalized.set(next.id ?? next.name.toLowerCase(), next);
+  }
+
+  return Array.from(normalized.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function MainApp() {
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [scope, setScope] = useState<Scope>("all");
-  const [activeView, setActiveView] = useState<Scope | "settings">("all");
+  const [activeView, setActiveView] = useState<ActiveView>("all");
   const [advancedFilters, setAdvancedFilters] = useState<Partial<FilterState>>({
     timeRange: [null, null],
     textLen: [null, null],
@@ -67,14 +112,16 @@ function MainApp() {
   const [activeTags, setActiveTags] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
-  const [taggingId, setTaggingId] = useState<number | null>(null);
-  const [tagInput, setTagInput] = useState("");
   const [shortcut, setShortcut] = useState(DEFAULT_SHORTCUT);
   const [autoPaste, setAutoPaste] = useState(true);
   const [keepWindowOpen, setKeepWindowOpen] = useState(false);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const [pageSize, setPageSize] = useState(50);
   const [historyLimit, setHistoryLimit] = useState(5000);
+  const [managedTags, setManagedTags] = useState<ManagedTag[]>([]);
+  const [tagManageBusy, setTagManageBusy] = useState(false);
+  const [tagSelectorOpen, setTagSelectorOpen] = useState(false);
+  const [tagSelectorStyle, setTagSelectorStyle] = useState<CSSProperties>({});
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [cardRows, setCardRows] = useState(1);
@@ -94,6 +141,13 @@ function MainApp() {
         if (typeof cfg.alwaysOnTop === "boolean") setAlwaysOnTop(cfg.alwaysOnTop);
         if (typeof cfg.pageSize === "number") setPageSize(cfg.pageSize);
         if (typeof cfg.historyLimit === "number") setHistoryLimit(cfg.historyLimit);
+        if (Array.isArray(cfg.managedTags)) {
+          const sanitized = sanitizeManagedTags(cfg.managedTags);
+          setManagedTags(sanitized);
+          if (JSON.stringify(sanitized) !== JSON.stringify(cfg.managedTags)) {
+            void api.setConfig({ managedTags: sanitized }).catch(console.error);
+          }
+        }
       })
       .catch((e) => console.error(e));
   }, []);
@@ -112,7 +166,7 @@ function MainApp() {
   useClipboardWatcher(0, setErrorMsg);
   useGlobalShortcut(shortcut, setErrorMsg);
 
-  const sourceHistory = history.length > 0 ? history : mockHistory;
+  const sourceHistory = history;
   const filterState = { search, scope, activeTags, ...advancedFilters };
   const filtered = useMemo(
     () => applyFilters(sourceHistory, filterState as FilterState),
@@ -123,6 +177,86 @@ function MainApp() {
   const tagCountMap = useMemo(
     () => new Map(tagCounts.map(({ tag, count }) => [tag, count])),
     [tagCounts],
+  );
+  const allKnownTags = useMemo(() => {
+    const map = new Map<string, ManagedTag>();
+    for (const tag of SYSTEM_TAGS) {
+      map.set(tag.id ?? tag.name.toLowerCase(), { ...tag });
+    }
+    for (const tag of managedTags) {
+      const cleaned = tag.name.trim();
+      if (!cleaned) continue;
+      const key = tag.id ?? cleaned.toLowerCase();
+      const base = map.get(key);
+      map.set(key, {
+        ...base,
+        ...tag,
+        name: cleaned,
+        common: Boolean(tag.common),
+        color: tag.color?.trim() || base?.color || DEFAULT_TAG_COLOR,
+      });
+    }
+    for (const { tag } of tagCounts) {
+      const cleaned = tag.trim();
+      const lower = cleaned.toLowerCase();
+      if (
+        cleaned &&
+        !LEGACY_SYSTEM_TAG_NAMES.has(lower) &&
+        !map.has(lower)
+      ) {
+        map.set(cleaned.toLowerCase(), {
+          name: cleaned,
+          common: false,
+          color: DEFAULT_TAG_COLOR,
+          system: false,
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [managedTags, tagCounts]);
+  const tabList = useMemo(() => {
+    const systemTabs = SYSTEM_TAGS.map((systemTag) => {
+      const current = allKnownTags.find((tag) => tag.id === systemTag.id) ?? systemTag;
+      return current.common
+        ? {
+            key: systemTag.key,
+            label: current.name,
+            dotClass: "dot-tag",
+            icon:
+              systemTag.key === "image"
+                ? FileImage
+                : systemTag.key === "file"
+                  ? Files
+                  : systemTag.key === "pinned"
+                    ? Star
+                    : systemTag.key === "url"
+                      ? Link2
+                      : systemTag.key === "code"
+                        ? FileCode2
+                        : FileText,
+          }
+        : null;
+    }).filter(Boolean) as Array<{ key: ActiveView; label: string; dotClass: string; icon: typeof FileText }>;
+    const customCommonTabs = allKnownTags
+      .filter((tag) => tag.common && !tag.system)
+      .map((tag) => ({
+        key: `tag:${tag.name}` as const,
+        label: `#${tag.name}`,
+        dotClass: "dot-tag",
+        icon: Tags,
+      }));
+    return [
+      ...BASE_TAB_LIST,
+      ...systemTabs,
+      ...customCommonTabs,
+      { key: "tag-selector" as const, label: "Tags", dotClass: "dot-tag", icon: Tags },
+      { key: "tag-manager" as const, label: "Tag Admin", dotClass: "dot-tag", icon: Tags },
+      { key: "settings" as const, label: "Settings", dotClass: "dot-settings", icon: Settings2 },
+    ];
+  }, [allKnownTags]);
+  const selectableTags = useMemo(
+    () => allKnownTags.filter((tag) => !tag.system),
+    [allKnownTags],
   );
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -167,7 +301,7 @@ function MainApp() {
 
   useEffect(() => {
     const node = cardStripRef.current;
-    if (!node || activeView === "settings") return;
+    if (!node || activeView === "settings" || activeView === "tag-manager") return;
 
     const CARD_HEIGHT = 220;
     const GAP = 12;
@@ -196,7 +330,7 @@ function MainApp() {
   }, [page, totalPages]);
 
   useEffect(() => {
-    if (activeView === "settings") return;
+    if (activeView === "settings" || activeView === "tag-manager") return;
     if (currentPageItems.length === 0) {
       setSelectedId(null);
       return;
@@ -243,6 +377,12 @@ function MainApp() {
       fileSize: [null, null],
     });
     setActiveView("all");
+  };
+
+  const saveManagedTags = async (nextTags: ManagedTag[]) => {
+    const normalized = sanitizeManagedTags(nextTags);
+    await api.setConfig({ managedTags: normalized });
+    setManagedTags(normalized);
   };
 
   const writeItemToClipboard = async (
@@ -344,36 +484,17 @@ function MainApp() {
     }
   };
 
-  const handleAddTag = async (id: number, tag: string) => {
-    const trimmed = tag.trim();
-    if (!trimmed) return;
-    const item = sourceHistory.find((i) => i.id === id);
-    if (!item || item.tags.includes(trimmed)) return;
-    try {
-      await api.setTags(id, [...item.tags, trimmed]);
-    } catch (err) {
-      setErrorMsg("Add tag error: " + String(err));
-    }
-  };
-
-  const handleRemoveTag = async (id: number, tag: string) => {
+  const handleToggleTag = async (id: number, tag: string) => {
     const item = sourceHistory.find((i) => i.id === id);
     if (!item) return;
+    const nextTags = item.tags.includes(tag)
+      ? item.tags.filter((value) => value !== tag)
+      : [...item.tags, tag];
     try {
-      await api.setTags(id, item.tags.filter((t) => t !== tag));
+      await api.setTags(id, nextTags);
     } catch (err) {
-      setErrorMsg("Remove tag error: " + String(err));
+      setErrorMsg("Tag update error: " + String(err));
     }
-  };
-
-  const startTag = (id: number) => {
-    setTaggingId(id);
-    setTagInput("");
-  };
-
-  const stopTag = () => {
-    setTaggingId(null);
-    setTagInput("");
   };
 
   const handleSettingsSaved = (settings: {
@@ -451,15 +572,98 @@ function MainApp() {
     }
   };
 
+  const handleCreateManagedTag = async (tag: string) => {
+    const cleaned = tag.trim();
+    if (!cleaned) return;
+    if (allKnownTags.some((value) => value.name.toLowerCase() === cleaned.toLowerCase())) {
+      throw new Error("Tag already exists.");
+    }
+    await saveManagedTags([...allKnownTags, { name: cleaned, common: false, color: DEFAULT_TAG_COLOR }]);
+  };
+
+  const handleRenameManagedTag = async (from: string, to: string) => {
+    const cleaned = to.trim();
+    if (!cleaned) return;
+    if (
+      from.toLowerCase() !== cleaned.toLowerCase() &&
+      allKnownTags.some((value) => value.name.toLowerCase() === cleaned.toLowerCase())
+    ) {
+      throw new Error("Tag already exists.");
+    }
+
+    setTagManageBusy(true);
+    try {
+      const affected = sourceHistory.filter((item) => item.tags.includes(from));
+      await Promise.all(
+        affected.map((item) =>
+          api.setTags(
+            item.id,
+            item.tags.map((tag) => (tag === from ? cleaned : tag)),
+          ),
+        ),
+      );
+      await saveManagedTags(
+        allKnownTags.map((tag) =>
+          tag.name === from ? { ...tag, name: cleaned } : tag,
+        ),
+      );
+      setActiveTags((prev) => prev.map((tag) => (tag === from ? cleaned : tag)));
+      setActiveView((prev) => (prev === `tag:${from}` ? (`tag:${cleaned}` as ActiveView) : prev));
+    } finally {
+      setTagManageBusy(false);
+    }
+  };
+
+  const handleDeleteManagedTag = async (tag: string) => {
+    if (!window.confirm(`Delete tag "${tag}"? This will remove it from all items.`)) {
+      return;
+    }
+    setTagManageBusy(true);
+    try {
+      const affected = sourceHistory.filter((item) => item.tags.includes(tag));
+      await Promise.all(
+        affected.map((item) => api.setTags(item.id, item.tags.filter((value) => value !== tag))),
+      );
+      await saveManagedTags(allKnownTags.filter((value) => value.name !== tag));
+      setActiveTags((prev) => prev.filter((value) => value !== tag));
+      setActiveView((prev) => (prev === `tag:${tag}` ? "all" : prev));
+      setTagSelectorOpen(false);
+    } finally {
+      setTagManageBusy(false);
+    }
+  };
+
+  const handleToggleManagedTagCommon = async (tag: string) => {
+    setTagManageBusy(true);
+    try {
+      await saveManagedTags(
+        allKnownTags.map((item) =>
+          item.name === tag ? { ...item, common: !item.common } : item,
+        ),
+      );
+    } finally {
+      setTagManageBusy(false);
+    }
+  };
+
+  const handleSetManagedTagColor = async (tag: string, color: string) => {
+    setTagManageBusy(true);
+    try {
+      await saveManagedTags(
+        allKnownTags.map((item) =>
+          item.name === tag ? { ...item, color } : item,
+        ),
+      );
+    } finally {
+      setTagManageBusy(false);
+    }
+  };
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
         if (privacyAction) return;
-        if (taggingId !== null) {
-          stopTag();
-          return;
-        }
         if (searchOpen) {
           setSearchOpen(false);
           setSearch("");
@@ -474,7 +678,7 @@ function MainApp() {
         return;
       }
 
-      if (activeView === "settings" || privacyAction || taggingId !== null) return;
+      if (activeView === "settings" || activeView === "tag-manager" || privacyAction) return;
       const target = event.target as HTMLElement | null;
       if (target) {
         const tag = target.tagName.toLowerCase();
@@ -509,17 +713,50 @@ function MainApp() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeView, currentPageItems, privacyAction, searchOpen, selectedId, taggingId]);
+  }, [activeView, currentPageItems, privacyAction, searchOpen, selectedId]);
 
-  const onTabClick = (key: Scope | "settings") => {
-    setActiveView(key);
-    if (key !== "settings") {
-      setScope(key);
+  const onTabClick = (key: ActiveView, event?: React.MouseEvent<HTMLButtonElement>) => {
+    if (key === "tag-selector") {
+      if (tagSelectorOpen) {
+        setTagSelectorOpen(false);
+        setActiveTags([]);
+        setActiveView("all");
+        setTagSelectorStyle({});
+      } else {
+        const shellRect = shellRef.current?.getBoundingClientRect();
+        const tabRect = event?.currentTarget.getBoundingClientRect();
+        if (shellRect && tabRect) {
+          setTagSelectorStyle({
+            left: `${Math.max(14, tabRect.left - shellRect.left)}px`,
+            top: `${tabRect.bottom - shellRect.top + 6}px`,
+          });
+        }
+        setTagSelectorOpen(true);
+        setActiveView("tag-selector");
+        setScope("all");
+      }
+      return;
     }
+
+    setTagSelectorOpen(false);
+    setTagSelectorStyle({});
+    setActiveView(key);
+    if (key === "settings" || key === "tag-manager") {
+      setScope("all");
+      return;
+    }
+    if (key.startsWith("tag:")) {
+      const tag = key.slice(4);
+      setScope("all");
+      setActiveTags(tag ? [tag] : []);
+      return;
+    }
+    setActiveTags([]);
+    setScope(key as Scope);
   };
 
   return (
-    <div className="easycp-shell">
+    <div className="easycp-shell" ref={shellRef}>
       <div
         className="easycp-drag-edge easycp-drag-edge-top"
         data-tauri-drag-region
@@ -570,15 +807,34 @@ function MainApp() {
           </button>
 
           <div className="easycp-filter-scroll" id="filter-scroll">
-            {TAB_LIST.map(({ key, label, dotClass, icon: Icon }) => {
-              const active = activeView === key;
+            {tabList.map(({ key, label, dotClass, icon: Icon }) => {
+              const active = key === "tag-selector" ? tagSelectorOpen : activeView === key;
+              const systemConfig = SYSTEM_TAGS.find((tag) => tag.key === key)
+                ? allKnownTags.find((tag) => tag.id === SYSTEM_TAGS.find((entry) => entry.key === key)?.id)
+                : null;
               return (
                 <button
                   key={key}
                   className={`easycp-filter-tab ${active ? "active" : ""}`}
-                  onClick={() => onTabClick(key)}
+                  style={
+                    key.startsWith("tag:") || systemConfig
+                      ? ({
+                          borderColor: active ? `${systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR}55` : undefined,
+                          background: active ? `${systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR}14` : undefined,
+                          color: active ? systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? undefined : undefined,
+                        } as object)
+                      : undefined
+                  }
+                  onClick={(event) => onTabClick(key, event)}
                 >
-                  <span className={`easycp-tab-dot ${dotClass}`} />
+                  <span
+                    className={`easycp-tab-dot ${dotClass}`}
+                    style={
+                      key.startsWith("tag:") || systemConfig
+                        ? ({ background: systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR } as object)
+                        : undefined
+                    }
+                  />
                   <span>{label}</span>
                   <Icon className="h-3.5 w-3.5" />
                 </button>
@@ -591,9 +847,39 @@ function MainApp() {
           </button>
       </section>
 
+      {tagSelectorOpen && (
+        <div className="easycp-tag-selector-panel" style={tagSelectorStyle}>
+          <div className="easycp-tag-selector-list">
+            {selectableTags.length === 0 ? (
+              <div className="easycp-tag-selector-empty">No tags available.</div>
+            ) : (
+              selectableTags.map((tag) => {
+                const active = activeTags.includes(tag.name);
+                return (
+                  <button
+                    key={tag.name}
+                    className={`easycp-tag-selector-option ${active ? "active" : ""}`}
+                    style={{
+                      borderColor: active ? `${tag.color}66` : undefined,
+                      background: active ? `${tag.color}14` : undefined,
+                      color: active ? tag.color : undefined,
+                    }}
+                    onClick={() => toggleTag(tag.name)}
+                  >
+                    {active ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+                    <span>#{tag.name}</span>
+                    {tag.common && <Star className="easycp-tag-selector-star h-3 w-3" style={{ color: tag.color }} />}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
       <ErrorBanner message={errorMsg} />
 
-      {activeView !== "settings" && hasFilters && (
+      {activeView !== "settings" && activeView !== "tag-manager" && hasFilters && (
         <div className="easycp-activebar">
           <div className="easycp-activebar-left">
             <span>
@@ -613,11 +899,24 @@ function MainApp() {
 
       <main
         className={`easycp-main ${
-          activeView === "settings" ? "easycp-main-settings" : "easycp-main-cards"
+          activeView === "settings" || activeView === "tag-manager"
+            ? "easycp-main-settings"
+            : "easycp-main-cards"
         }`}
       >
         {activeView === "settings" ? (
           <SettingsModal onSaved={handleSettingsSaved} />
+        ) : activeView === "tag-manager" ? (
+          <TagManagementPage
+            tags={allKnownTags}
+            tagCounts={tagCountMap}
+            busy={tagManageBusy}
+            onCreate={handleCreateManagedTag}
+            onRename={handleRenameManagedTag}
+            onDelete={handleDeleteManagedTag}
+            onToggleCommon={handleToggleManagedTagCommon}
+            onSetColor={handleSetManagedTagColor}
+          />
         ) : filtered.length === 0 ? (
           <EmptyState
             filtered={hasFilters && sourceHistory.length > 0}
@@ -640,27 +939,22 @@ function MainApp() {
               </button>
             )}
             {currentPageItems.map((item) => (
-              <ClipboardCard
-                key={item.id}
-                item={item}
-                isSelected={selectedId === item.id}
-                isCopied={copiedId === item.id}
-                isTagging={taggingId === item.id}
-                tagInput={tagInput}
-                onCopy={handleCopyFromUI}
-                onPaste={handlePaste}
-                onTogglePin={handleTogglePin}
-                onDelete={handleDelete}
-                onAddTag={handleAddTag}
-                onRemoveTag={handleRemoveTag}
-                onEnablePrivacy={handleEnablePrivacy}
-                onDisablePrivacy={handleDisablePrivacy}
-                onStartTag={startTag}
-                onStopTag={stopTag}
-                onTagInputChange={setTagInput}
-                onQuickEdit={handleQuickEdit}
-              />
-            ))}
+                <ClipboardCard
+                  key={item.id}
+                  item={item}
+                  availableTags={selectableTags.map((tag) => tag.name)}
+                  isSelected={selectedId === item.id}
+                  isCopied={copiedId === item.id}
+                  onCopy={handleCopyFromUI}
+                  onPaste={handlePaste}
+                  onTogglePin={handleTogglePin}
+                  onDelete={handleDelete}
+                  onToggleTag={handleToggleTag}
+                  onEnablePrivacy={handleEnablePrivacy}
+                  onDisablePrivacy={handleDisablePrivacy}
+                  onQuickEdit={handleQuickEdit}
+                />
+              ))}
             {page < totalPages - 1 && (
               <button className="easycp-page-card" onClick={() => handlePageChange(page + 1)}>
                 <Ellipsis className="h-8 w-8" />

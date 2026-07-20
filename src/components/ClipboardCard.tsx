@@ -1,6 +1,7 @@
 import { useMemo, useState, type WheelEvent } from "react";
 import {
   Check,
+  CheckSquare,
   ChevronDown,
   Clock3,
   Copy,
@@ -13,13 +14,12 @@ import {
   Pin,
   Plus,
   Shield,
+  Square,
   Tag,
   Trash2,
 } from "lucide-react";
 import { formatTime } from "../lib/time";
 import type { HistoryItem } from "../types";
-import { TagsRow } from "./TagsRow";
-
 function formatBytes(bytes: number, decimals = 1) {
   if (!+bytes) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -55,44 +55,35 @@ function sourceApp(item: HistoryItem) {
 
 interface Props {
   item: HistoryItem;
+  availableTags: string[];
   isSelected?: boolean;
   isCopied: boolean;
-  isTagging: boolean;
-  tagInput: string;
   onCopy: (item: HistoryItem | { id: number; content: string; contentType: "text" }) => void;
   onPaste: (item: HistoryItem) => void;
   onTogglePin: (id: number) => void;
   onDelete: (id: number) => void;
-  onAddTag: (id: number, tag: string) => void;
-  onRemoveTag: (id: number, tag: string) => void;
+  onToggleTag: (id: number, tag: string) => void;
   onEnablePrivacy: (id: number) => void;
   onDisablePrivacy: (id: number) => void;
-  onStartTag: (id: number) => void;
-  onStopTag: () => void;
-  onTagInputChange: (v: string) => void;
   onQuickEdit: (item: HistoryItem) => void;
 }
 
 export function ClipboardCard({
   item,
+  availableTags,
   isSelected = false,
   isCopied,
-  isTagging,
-  tagInput,
   onCopy,
   onPaste,
   onTogglePin,
   onDelete,
-  onAddTag,
-  onRemoveTag,
+  onToggleTag,
   onEnablePrivacy,
   onDisablePrivacy,
-  onStartTag,
-  onStopTag,
-  onTagInputChange,
   onQuickEdit,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const typeLabel = useMemo(() => detectLabel(item), [item]);
   const codeLike = useMemo(() => isCodeLike(item), [item]);
   const typeBadgeClass = codeLike ? "type-code" : `type-${item.contentType}`;
@@ -101,12 +92,6 @@ export function ClipboardCard({
   const totalSize = item.metadata?.totalSize?.[0] ?? item.metadata?.size?.[0];
   const width = item.metadata?.width?.[0];
   const height = item.metadata?.height?.[0];
-
-  const commitTag = () => {
-    const trimmed = tagInput.trim();
-    if (trimmed) onAddTag(item.id, trimmed);
-    onStopTag();
-  };
 
   const stopOuterScroll = (event: WheelEvent<HTMLElement>, axis: "x" | "y") => {
     const node = event.currentTarget;
@@ -204,8 +189,38 @@ export function ClipboardCard({
         >
           <ChevronDown className="easycp-more-icon h-4 w-4" />
         </button>
+      </div>
 
-        {menuOpen && (
+      {menuOpen && (
+        <>
+          {tagPickerOpen && (
+            <div
+              className="easycp-card-menu easycp-card-tag-picker"
+              onClick={(e) => e.stopPropagation()}
+              onWheel={(event) => stopOuterScroll(event, "y")}
+            >
+              {availableTags.length === 0 ? (
+                <div className="easycp-card-menu-empty">No tags available</div>
+              ) : (
+                availableTags.map((tag) => {
+                  const active = item.tags.includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      className={`easycp-card-tag-option ${active ? "active" : ""}`}
+                      onClick={() => {
+                        onToggleTag(item.id, tag);
+                      }}
+                    >
+                      {active ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+                      #{tag}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          )}
+
           <div
             className="easycp-card-menu"
             onClick={(e) => e.stopPropagation()}
@@ -214,6 +229,7 @@ export function ClipboardCard({
             <button
               onClick={() => {
                 setMenuOpen(false);
+                setTagPickerOpen(false);
                 onPaste(item);
               }}
             >
@@ -223,6 +239,7 @@ export function ClipboardCard({
             <button
               onClick={() => {
                 setMenuOpen(false);
+                setTagPickerOpen(false);
                 onCopy(item);
               }}
             >
@@ -232,6 +249,7 @@ export function ClipboardCard({
             <button
               onClick={() => {
                 setMenuOpen(false);
+                setTagPickerOpen(false);
                 onTogglePin(item.id);
               }}
             >
@@ -240,9 +258,7 @@ export function ClipboardCard({
             </button>
             <button
               onClick={() => {
-                setMenuOpen(false);
-                if (isTagging) onStopTag();
-                else onStartTag(item.id);
+                setTagPickerOpen((prev) => !prev);
               }}
             >
               <Plus className="h-3.5 w-3.5" />
@@ -251,6 +267,7 @@ export function ClipboardCard({
             <button
               onClick={() => {
                 setMenuOpen(false);
+                setTagPickerOpen(false);
                 if (hasPrivacy) onDisablePrivacy(item.id);
                 else onEnablePrivacy(item.id);
               }}
@@ -262,6 +279,7 @@ export function ClipboardCard({
               <button
                 onClick={() => {
                   setMenuOpen(false);
+                  setTagPickerOpen(false);
                   onQuickEdit(item);
                 }}
               >
@@ -273,6 +291,7 @@ export function ClipboardCard({
               className="danger"
               onClick={() => {
                 setMenuOpen(false);
+                setTagPickerOpen(false);
                 onDelete(item.id);
               }}
             >
@@ -280,24 +299,10 @@ export function ClipboardCard({
               Delete
             </button>
           </div>
-        )}
-      </div>
+        </>
+      )}
 
       {renderBody()}
-
-      {isTagging && (
-        <div className="easycp-tags-wrap" onClick={(e) => e.stopPropagation()} onWheel={(event) => stopOuterScroll(event, "x")}>
-          <TagsRow
-            tags={[]}
-            isEditing={isTagging}
-            inputValue={tagInput}
-            onInputChange={onTagInputChange}
-            onCommit={commitTag}
-            onCancel={onStopTag}
-            onRemove={(tag) => onRemoveTag(item.id, tag)}
-          />
-        </div>
-      )}
 
       <div className="easycp-meta-strip" onClick={(e) => e.stopPropagation()} onWheel={(event) => stopOuterScroll(event, "x")}>
         <span className={`easycp-meta-item easycp-type-badge ${typeBadgeClass}`}>{typeLabel}</span>

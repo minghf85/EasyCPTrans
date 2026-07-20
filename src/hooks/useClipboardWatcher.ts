@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import {
   getFilePath,
   onClipboardChange,
+  readClipboard,
   startWatch,
   type ReadClipboard,
 } from "tauri-plugin-clipboard-next-api";
@@ -118,6 +119,14 @@ export function useClipboardWatcher(
     const setup = async () => {
       try {
         const filePath = await getFilePath();
+        const initial = await readClipboard(true, filePath).catch(() => null);
+        if (initial?.files?.value.files.length) {
+          lastSig = `files_${initial.files.value.files.map((f) => `${f.path}_${f.size}`).join("|")}`;
+        } else if (initial?.text?.value) {
+          lastSig = initial.text.value;
+        } else if (initial?.image?.value.path) {
+          lastSig = `img_${initial.image.value.width}x${initial.image.value.height}`;
+        }
         await startWatch();
         unlisten = await onClipboardChange(handleClipboardChange, {
           imageAutoSave: true,

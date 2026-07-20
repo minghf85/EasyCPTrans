@@ -4,7 +4,7 @@ use crate::privacy::{
     decrypt_content, encrypt_content, has_password, has_security_question, load_privacy_config,
     save_privacy_config, set_password, PrivacyStatus,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::Row;
 use base64::Engine;
 use std::collections::{HashMap, HashSet};
@@ -47,6 +47,84 @@ fn merge_unique_tags(existing: Vec<String>, incoming: Vec<String>) -> Vec<String
     result
 }
 
+const DEFAULT_TAG_COLOR: &str = "#0f6cbd";
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedTagConfig {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub common: bool,
+    #[serde(default = "default_tag_color")]
+    pub color: String,
+    #[serde(default)]
+    pub system: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ManagedTagConfigInput {
+    Name(String),
+    Full(ManagedTagConfig),
+}
+
+fn normalize_managed_tags(items: Vec<ManagedTagConfigInput>) -> Vec<ManagedTagConfig> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+    for item in items {
+        let tag = match item {
+            ManagedTagConfigInput::Name(name) => ManagedTagConfig {
+                id: None,
+                name,
+                common: false,
+                color: default_tag_color(),
+                system: false,
+            },
+            ManagedTagConfigInput::Full(tag) => tag,
+        };
+        let cleaned = tag.name.trim();
+        if cleaned.is_empty() {
+            continue;
+        }
+        let key = tag
+            .id
+            .clone()
+            .unwrap_or_else(|| cleaned.to_lowercase());
+        if seen.insert(key) {
+            normalized.push(ManagedTagConfig {
+                id: tag.id,
+                name: cleaned.to_string(),
+                common: tag.common,
+                color: normalize_tag_color(&tag.color),
+                system: tag.system,
+            });
+        }
+    }
+    normalized
+}
+
+fn default_tag_color() -> String {
+    DEFAULT_TAG_COLOR.to_string()
+}
+
+fn normalize_tag_color(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.starts_with('#') && (trimmed.len() == 7 || trimmed.len() == 4) {
+        return trimmed.to_string();
+    }
+    default_tag_color()
+}
+
+fn deserialize_managed_tags<'de, D>(deserializer: D) -> Result<Vec<ManagedTagConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Vec::<ManagedTagConfigInput>::deserialize(deserializer)?;
+    Ok(normalize_managed_tags(raw))
+}
+
 fn read_app_config(app: &AppHandle) -> AppConfig {
     let conf_path = app.path().app_data_dir().unwrap().join("config.json");
     if let Ok(data) = std::fs::read_to_string(&conf_path) {
@@ -67,6 +145,7 @@ fn read_app_config(app: &AppHandle) -> AppConfig {
         webdav_password: "".to_string(),
         webdav_sync_enabled: false,
         device_name: default_device_name(),
+        managed_tags: Vec::new(),
         window_width: None,
         window_height: None,
         window_x: None,
@@ -789,6 +868,8 @@ pub struct AppConfig {
     pub webdav_sync_enabled: bool,
     #[serde(default = "default_device_name")]
     pub device_name: String,
+    #[serde(default, deserialize_with = "deserialize_managed_tags")]
+    pub managed_tags: Vec<ManagedTagConfig>,
     #[serde(default)]
     pub window_width: Option<f64>,
     #[serde(default)]
@@ -835,6 +916,7 @@ pub struct ConfigResponse {
     pub webdav_password: String,
     pub webdav_sync_enabled: bool,
     pub device_name: String,
+    pub managed_tags: Vec<ManagedTagConfig>,
     pub window_width: Option<f64>,
     pub window_height: Option<f64>,
     pub window_x: Option<f64>,
@@ -856,6 +938,7 @@ pub struct PartialAppConfig {
     pub webdav_password: Option<String>,
     pub webdav_sync_enabled: Option<bool>,
     pub device_name: Option<String>,
+    pub managed_tags: Option<Vec<ManagedTagConfig>>,
     pub window_width: Option<f64>,
     pub window_height: Option<f64>,
     pub window_x: Option<f64>,
@@ -889,6 +972,7 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
         webdav_password: conf.webdav_password,
         webdav_sync_enabled: conf.webdav_sync_enabled,
         device_name: conf.device_name,
+        managed_tags: conf.managed_tags,
         window_width: conf.window_width,
         window_height: conf.window_height,
         window_x: conf.window_x,
@@ -936,6 +1020,14 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
     }
     if let Some(value) = config.device_name {
         merged.device_name = value;
+    }
+    if let Some(value) = config.managed_tags {
+        merged.managed_tags = normalize_managed_tags(
+            value
+                .into_iter()
+                .map(ManagedTagConfigInput::Full)
+                .collect(),
+        );
     }
     if let Some(value) = config.window_width {
         merged.window_width = Some(value);

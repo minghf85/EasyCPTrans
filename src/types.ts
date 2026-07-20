@@ -11,6 +11,14 @@ export interface HistoryItem {
   metadata: Record<string, string[]>;
 }
 
+export interface ManagedTag {
+  id?: string;
+  name: string;
+  common: boolean;
+  color: string;
+  system?: boolean;
+}
+
 export interface IngestResult {
   accepted: boolean;
   itemId: number | null;

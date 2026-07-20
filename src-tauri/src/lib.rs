@@ -239,48 +239,13 @@ pub fn run() {
             })?;
             app.manage(db::AppState { pool });
 
-            let should_startup_sync = tauri::async_runtime::block_on(async {
+            let _ = tauri::async_runtime::block_on(async {
                 let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(1) FROM clipboard_items")
                     .fetch_one(&app.state::<db::AppState>().pool)
                     .await
                     .unwrap_or(0);
-
-                if count > 0 {
-                    return false;
-                }
-
-                let conf_path = app_data.join("config.json");
-                let Ok(data) = std::fs::read_to_string(conf_path) else {
-                    return false;
-                };
-                let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) else {
-                    return false;
-                };
-
-                parsed
-                    .get("webdavSyncEnabled")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                    && parsed
-                        .get("webdavUrl")
-                        .and_then(|v| v.as_str())
-                        .map(|v| !v.trim().is_empty())
-                        .unwrap_or(false)
-                    && parsed
-                        .get("webdavUsername")
-                        .and_then(|v| v.as_str())
-                        .map(|v| !v.trim().is_empty())
-                        .unwrap_or(false)
+                println!("Clipboard rows on startup: {}", count);
             });
-
-            if should_startup_sync {
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(err) = sync::run_startup_sync(app_handle).await {
-                        eprintln!("Startup WebDAV migration sync failed: {}", err);
-                    }
-                });
-            }
 
             create_main_window(app)?;
 

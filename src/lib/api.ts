@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { HistoryItem, IngestResult } from "../types";
+import type { HistoryItem, IngestResult, ManagedTag } from "../types";
 
 // 单一入口封装所有 Rust 命令调用，方便集中替换/Mock。
 export const api = {
@@ -83,6 +83,7 @@ export const api = {
       webdavPassword: string;
       webdavSyncEnabled: boolean;
       deviceName: string;
+      managedTags: ManagedTag[];
       windowWidth?: number;
       windowHeight?: number;
       windowX?: number;
@@ -102,6 +103,7 @@ export const api = {
     webdavPassword?: string;
     webdavSyncEnabled?: boolean;
     deviceName?: string;
+    managedTags?: ManagedTag[];
     windowWidth?: number;
     windowHeight?: number;
     windowX?: number;
