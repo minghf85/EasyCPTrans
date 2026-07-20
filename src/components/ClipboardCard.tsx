@@ -98,6 +98,7 @@ function extractInfo(text: string): ExtractedInfo[] {
 
 interface Props {
   item: HistoryItem;
+  isSelected?: boolean;
   isCopied: boolean;
   isTagging: boolean;
   tagInput: string;
@@ -118,6 +119,7 @@ interface Props {
 
 export function ClipboardCard({
   item,
+  isSelected = false,
   isCopied,
   isTagging,
   tagInput,
@@ -145,7 +147,10 @@ export function ClipboardCard({
 
   return (
     <div
-      className="group flex flex-col bg-white border border-slate-200 rounded-xl p-3 shadow-sm hover:shadow-md hover:border-blue-300 active:scale-[0.99] transition-all cursor-pointer relative"
+      id={`history-item-${item.id}`}
+      className={`group flex flex-col bg-white border rounded-xl p-3 shadow-sm hover:shadow-md hover:border-blue-300 active:scale-[0.99] transition-all cursor-pointer relative ${
+        isSelected ? "border-blue-500 ring-2 ring-blue-200" : "border-slate-200"
+      }`}
       onClick={() => onCopy(item)}
     >
       {/* 内容 */}

@@ -40,8 +40,6 @@ const SCOPES: { value: Scope; label: string; Icon: ComponentType<{ className?: s
   { value: "email", label: "邮箱", Icon: Mail },
 ];
 
-const MAX_TAG_CHIPS = 16;
-
 const toDateTimeStr = (ts: number) => {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
@@ -141,8 +139,6 @@ export function FilterBar({
   onAdvancedFilterChange,
 }: Props) {
   const tagCounts = aggregateTags(history);
-  const hiddenTagCount = Math.max(0, tagCounts.length - MAX_TAG_CHIPS);
-  const visibleTags = tagCounts.slice(0, MAX_TAG_CHIPS);
   const [openDropdown, setOpenDropdown] = useState<'time' | 'text' | 'file' | null>(null);
 
   const stats = useMemo(() => {
@@ -428,9 +424,9 @@ export function FilterBar({
         </div>
       </div>
 
-      {visibleTags.length > 0 && (
+      {tagCounts.length > 0 && (
         <div className="flex items-center gap-1.5 flex-wrap">
-          {visibleTags.map(({ tag, count }) => {
+          {tagCounts.map(({ tag, count }) => {
             const active = activeTags.includes(tag);
             return (
               <button
@@ -455,11 +451,6 @@ export function FilterBar({
               </button>
             );
           })}
-          {hiddenTagCount > 0 && (
-            <span className="text-xs text-slate-400 px-1">
-              +{hiddenTagCount} more
-            </span>
-          )}
         </div>
       )}
     </div>

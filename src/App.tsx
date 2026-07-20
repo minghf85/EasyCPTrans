@@ -18,6 +18,7 @@ import { useHistory } from "./hooks/useHistory";
 import { api } from "./lib/api";
 import {
   applyFilters,
+  aggregateTags,
   emptyFilter,
   isFilterActive,
   type Scope,
@@ -45,8 +46,10 @@ function MainApp() {
   const [shortcut, setShortcut] = useState(DEFAULT_SHORTCUT);
   const [autoPaste, setAutoPaste] = useState(true);
   const [keepWindowOpen, setKeepWindowOpen] = useState(false);
+  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(0);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [privacyAction, setPrivacyAction] = useState<{ id: number } | null>(null);
   const [privacyBusy, setPrivacyBusy] = useState(false);
   const [privacyError, setPrivacyError] = useState<string | null>(null);
@@ -57,16 +60,23 @@ function MainApp() {
     setPage(0);
   }, [search, scope, activeTags, advancedFilters]);
 
-  useMemo(() => {
+  useEffect(() => {
     api.getConfig().then(cfg => {
         if (cfg) {
             if (cfg.shortcut) setShortcut(cfg.shortcut);
-            if (typeof (cfg as any).autoPaste === 'boolean') setAutoPaste((cfg as any).autoPaste);
-            if (typeof (cfg as any).keepWindowOpen === 'boolean') setKeepWindowOpen((cfg as any).keepWindowOpen);
-            if (typeof (cfg as any).pageSize === 'number') setPageSize((cfg as any).pageSize);
+            if (typeof cfg.autoPaste === "boolean") setAutoPaste(cfg.autoPaste);
+            if (typeof cfg.keepWindowOpen === "boolean") setKeepWindowOpen(cfg.keepWindowOpen);
+            if (typeof cfg.alwaysOnTop === "boolean") setAlwaysOnTop(cfg.alwaysOnTop);
+            if (typeof cfg.pageSize === "number") setPageSize(cfg.pageSize);
         }
     }).catch(e => console.error(e));
   }, []);
+
+  useEffect(() => {
+    getCurrentWindow().setAlwaysOnTop(alwaysOnTop).catch((err) => {
+      setErrorMsg("Set always-on-top failed: " + String(err));
+    });
+  }, [alwaysOnTop]);
 
   const { history } = useHistory(setErrorMsg);
   
@@ -79,11 +89,30 @@ function MainApp() {
     [history, search, scope, activeTags, advancedFilters],
   );
   const hasFilters = isFilterActive(filterState);
+  const tagCounts = useMemo(() => aggregateTags(history), [history]);
+  const tagCountMap = useMemo(
+    () => new Map(tagCounts.map(({ tag, count }) => [tag, count])),
+    [tagCounts],
+  );
+  const currentPageItems = useMemo(
+    () => filtered.slice(page * pageSize, (page + 1) * pageSize),
+    [filtered, page, pageSize],
+  );
 
   const toggleTag = (tag: string) => {
-    setActiveTags((prev) =>
-      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
-    );
+    setActiveTags((prev) => {
+      if (prev.includes(tag)) {
+        return prev.filter((t) => t !== tag);
+      }
+      if (prev.length === 1) {
+        const active = prev[0];
+        const count = tagCountMap.get(active) ?? 0;
+        if (active !== tag && count <= 1) {
+          return [tag];
+        }
+      }
+      return [...prev, tag];
+    });
   };
 
   const clearFilters = () => {
@@ -126,15 +155,17 @@ function MainApp() {
         console.error("mark_used failed", err);
       }
 
+      let windowHidden = false;
       try {
-        if (!keepWindowOpen) {
+        if (!keepWindowOpen && !alwaysOnTop) {
           await getCurrentWindow().hide();
+          windowHidden = true;
         }
       } catch (err) {
         setErrorMsg("Hide error: " + String(err));
       }
 
-      if (autoPaste) {
+      if (autoPaste && windowHidden) {
         setTimeout(async () => {
           try {
             await api.simulatePaste();
@@ -146,6 +177,13 @@ function MainApp() {
     } catch (err: any) {
       setErrorMsg("Copy error: " + (err?.message ?? String(err)));
     }
+  };
+
+  const handleCopyFromUI = (item: HistoryItem | { id: number; content: string; contentType: "text" }) => {
+    if ("id" in item && item.id > 0) {
+      setSelectedId(item.id);
+    }
+    void handleCopy(item);
   };
 
   const handleTogglePin = async (id: number) => {
@@ -199,14 +237,95 @@ function MainApp() {
     shortcut: string;
     autoPaste: boolean;
     keepWindowOpen: boolean;
+    alwaysOnTop: boolean;
     pageSize: number;
   }) => {
     setShortcut(settings.shortcut || DEFAULT_SHORTCUT);
     setAutoPaste(settings.autoPaste);
     setKeepWindowOpen(settings.keepWindowOpen);
+    setAlwaysOnTop(settings.alwaysOnTop);
     setPageSize(settings.pageSize);
     setPage(0);
   };
+
+  const handleToggleAlwaysOnTop = async () => {
+    const next = !alwaysOnTop;
+    setAlwaysOnTop(next);
+    try {
+      const cfg = await api.getConfig();
+      await api.setConfig({
+        cachePath: cfg?.cachePath || "",
+        shortcut: cfg?.shortcut || shortcut || DEFAULT_SHORTCUT,
+        autoPaste: typeof cfg?.autoPaste === "boolean" ? cfg.autoPaste : autoPaste,
+        keepWindowOpen:
+          typeof cfg?.keepWindowOpen === "boolean" ? cfg.keepWindowOpen : keepWindowOpen,
+        alwaysOnTop: next,
+        pageSize: typeof cfg?.pageSize === "number" ? cfg.pageSize : pageSize,
+        webdavSyncEnabled:
+          typeof cfg?.webdavSyncEnabled === "boolean"
+            ? cfg.webdavSyncEnabled
+            : false,
+        webdavUrl: cfg?.webdavUrl || "",
+        webdavUsername: cfg?.webdavUsername || "",
+        webdavPassword: cfg?.webdavPassword || "",
+        deviceName: cfg?.deviceName || "",
+      });
+    } catch (err) {
+      setErrorMsg("Save always-on-top failed: " + String(err));
+    }
+  };
+
+  useEffect(() => {
+    if (currentPageItems.length === 0) {
+      setSelectedId(null);
+      return;
+    }
+    if (!currentPageItems.some((i) => i.id === selectedId)) {
+      setSelectedId(currentPageItems[0].id);
+    }
+  }, [currentPageItems, selectedId]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (showSettings || privacyAction || taggingId !== null) return;
+      const target = event.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName.toLowerCase();
+        if (tag === "input" || tag === "textarea" || target.isContentEditable) {
+          return;
+        }
+      }
+
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if (currentPageItems.length === 0) return;
+        const currentIndex = currentPageItems.findIndex((i) => i.id === selectedId);
+        const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        const nextIndex = Math.min(
+          currentPageItems.length - 1,
+          Math.max(0, baseIndex + delta),
+        );
+        const next = currentPageItems[nextIndex];
+        setSelectedId(next.id);
+        const element = document.getElementById(`history-item-${next.id}`);
+        element?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return;
+      }
+
+      if (event.key === "Enter") {
+        if (currentPageItems.length === 0) return;
+        const selected =
+          currentPageItems.find((i) => i.id === selectedId) ?? currentPageItems[0];
+        setSelectedId(selected.id);
+        event.preventDefault();
+        handleCopyFromUI(selected);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [currentPageItems, selectedId, showSettings, privacyAction, taggingId, autoPaste, keepWindowOpen, alwaysOnTop]);
 
   const handleQuickEdit = (item: HistoryItem) => {
     if (item.contentType !== "text") return;
@@ -268,7 +387,13 @@ function MainApp() {
 
   return (
     <div className="h-screen w-full bg-slate-50 flex flex-col text-slate-800 font-sans">
-      <SearchHeader value={search} onChange={setSearch} onSettingsClick={() => setShowSettings(true)} />
+      <SearchHeader
+        value={search}
+        onChange={setSearch}
+        onSettingsClick={() => setShowSettings(true)}
+        alwaysOnTop={alwaysOnTop}
+        onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
+      />
       <FilterBar
         history={history}
         scope={scope}
@@ -348,15 +473,16 @@ function MainApp() {
           />
         ) : (
           <>
-            {filtered.slice(page * pageSize, (page + 1) * pageSize).map((item, index) => (
+            {currentPageItems.map((item, index) => (
               <ClipboardCard
                 key={item.id}
                 item={item}
+                isSelected={selectedId === item.id}
                 isCopied={copiedId === item.id}
                 isTagging={taggingId === item.id}
                 tagInput={tagInput}
                 showExtracts={index < 5}
-                onCopy={handleCopy}
+                onCopy={handleCopyFromUI}
                 onTogglePin={handleTogglePin}
                 onDelete={handleDelete}
                 onAddTag={handleAddTag}

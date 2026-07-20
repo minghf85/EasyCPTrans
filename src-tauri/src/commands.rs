@@ -6,7 +6,7 @@ use crate::privacy::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const PRIVACY_TAG: &str = "隐私";
@@ -28,6 +28,63 @@ fn parse_tags(raw: Option<String>) -> Vec<String> {
 fn parse_metadata(raw: Option<String>) -> HashMap<String, Vec<String>> {
     raw.and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+fn default_device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "This Device".to_string())
+}
+
+fn sanitize_device_name(value: String) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        default_device_name()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn merge_unique_tags(existing: Vec<String>, incoming: Vec<String>) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    for tag in existing.into_iter().chain(incoming.into_iter()) {
+        let cleaned = tag.trim();
+        if cleaned.is_empty() {
+            continue;
+        }
+        let key = cleaned.to_lowercase();
+        if seen.insert(key) {
+            result.push(cleaned.to_string());
+        }
+    }
+    result
+}
+
+fn read_app_config(app: &AppHandle) -> AppConfig {
+    let conf_path = app.path().app_data_dir().unwrap().join("config.json");
+    if let Ok(data) = std::fs::read_to_string(&conf_path) {
+        if let Ok(conf) = serde_json::from_str::<AppConfig>(&data) {
+            return conf;
+        }
+    }
+    AppConfig {
+        cache_path: "".to_string(),
+        shortcut: "CommandOrControl+Shift+E".to_string(),
+        auto_paste: true,
+        keep_window_open: false,
+        always_on_top: false,
+        page_size: 50,
+        history_limit: 5000,
+        webdav_url: "".to_string(),
+        webdav_username: "".to_string(),
+        webdav_password: "".to_string(),
+        webdav_sync_enabled: false,
+        device_name: default_device_name(),
+    }
 }
 
 async fn emit_changed(app: &AppHandle) {
@@ -70,15 +127,18 @@ pub async fn ingest_clipboard(
         }
     }
 
-    let raw = ClipboardItem {
+    let mut raw = ClipboardItem {
         content_type: payload.content_type,
         content: payload.content,
         source_app: None,
         metadata,
         tags: Vec::new(),
     };
+    let cfg = read_app_config(&app);
+    let device_tag = sanitize_device_name(cfg.device_name);
+    raw.tags.push(device_tag);
 
-    let processed = match Pipeline::default().run(raw) {
+    let mut processed = match Pipeline::default().run(raw) {
         PipelineOutcome::Accepted(item) => item,
         PipelineOutcome::Dropped { interceptor, reason } => {
             return Ok(IngestResult {
@@ -96,27 +156,34 @@ pub async fn ingest_clipboard(
     let pool = &state.pool;
     let hash = compute_hash(&processed.content_type, &processed.content);
 
-    let existing: Option<i64> = sqlx::query(
-        "SELECT id FROM clipboard_items WHERE content_hash = ?1 AND (is_private IS NULL OR is_private = 0) LIMIT 1",
+    let existing = sqlx::query(
+        "SELECT id, tags FROM clipboard_items WHERE content_hash = ?1 AND (is_private IS NULL OR is_private = 0) LIMIT 1",
     )
     .bind(&hash)
     .fetch_optional(pool)
     .await
-    .map_err(|e| e.to_string())?
-    .map(|row| row.get::<i64, _>("id"));
+    .map_err(|e| e.to_string())?;
+
+    if let Some(ref row) = existing {
+        let existing_tags = parse_tags(row.try_get("tags").ok());
+        processed.tags = merge_unique_tags(existing_tags, processed.tags.clone());
+    }
 
     let metadata_json = serde_json::to_string(&processed.metadata).unwrap_or_else(|_| "{}".into());
     let tags_json = serde_json::to_string(&processed.tags).unwrap_or_else(|_| "[]".into());
 
-    let (item_id, deduped) = if let Some(id) = existing {
+    let (item_id, deduped) = if let Some(row) = existing {
+        let id: i64 = row.get("id");
         sqlx::query(
             "UPDATE clipboard_items
              SET last_used_at = CURRENT_TIMESTAMP,
                  use_count    = use_count + 1,
-                 metadata     = COALESCE(NULLIF(metadata, ''), ?1)
-             WHERE id = ?2",
+                 metadata     = COALESCE(NULLIF(metadata, ''), ?1),
+                 tags         = ?2
+             WHERE id = ?3",
         )
         .bind(&metadata_json)
+        .bind(&tags_json)
         .bind(id)
         .execute(pool)
         .await
@@ -699,6 +766,8 @@ pub struct AppConfig {
     pub auto_paste: bool,
     #[serde(default = "default_keep_window_open")]
     pub keep_window_open: bool,
+    #[serde(default = "default_bool_false")]
+    pub always_on_top: bool,
     #[serde(default = "default_page_size")]
     pub page_size: u32,
     #[serde(default = "default_history_limit")]
@@ -711,6 +780,8 @@ pub struct AppConfig {
     pub webdav_password: String,
     #[serde(default = "default_bool_false")]
     pub webdav_sync_enabled: bool,
+    #[serde(default = "default_device_name")]
+    pub device_name: String,
 }
 
 fn default_auto_paste() -> bool {
@@ -741,70 +812,49 @@ pub struct ConfigResponse {
     pub effective_dir: String,
     pub auto_paste: bool,
     pub keep_window_open: bool,
+    pub always_on_top: bool,
     pub page_size: u32,
     pub history_limit: u32,
     pub webdav_url: String,
     pub webdav_username: String,
     pub webdav_password: String,
     pub webdav_sync_enabled: bool,
+    pub device_name: String,
 }
 
 #[tauri::command]
 pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
     let app_data = app.path().app_data_dir().unwrap();
-    let conf_path = app_data.join("config.json");
-
-    let mut cache_path = "".to_string();
-    let mut shortcut = "CommandOrControl+Shift+E".to_string();
-    let mut auto_paste = true;
-    let mut keep_window_open = false;
-    let mut page_size = 50;
-    let mut history_limit = 5000;
-    let mut webdav_url = "".to_string();
-    let mut webdav_username = "".to_string();
-    let mut webdav_password = "".to_string();
-    let mut webdav_sync_enabled = false;
-
-    if let Ok(data) = std::fs::read_to_string(&conf_path) {
-        if let Ok(conf) = serde_json::from_str::<AppConfig>(&data) {
-            cache_path = conf.cache_path;
-            shortcut = conf.shortcut;
-            auto_paste = conf.auto_paste;
-            keep_window_open = conf.keep_window_open;
-            page_size = conf.page_size;
-            history_limit = conf.history_limit;
-            webdav_url = conf.webdav_url;
-            webdav_username = conf.webdav_username;
-            webdav_password = conf.webdav_password;
-            webdav_sync_enabled = conf.webdav_sync_enabled;
-        }
-    }
+    let conf = read_app_config(&app);
 
     let default_dir = app_data.to_string_lossy().to_string();
-    let effective_dir = if cache_path.is_empty() {
+    let effective_dir = if conf.cache_path.is_empty() {
         default_dir.clone()
     } else {
-        cache_path.clone()
+        conf.cache_path.clone()
     };
 
     Ok(ConfigResponse {
-        cache_path,
-        shortcut,
+        cache_path: conf.cache_path,
+        shortcut: conf.shortcut,
         default_dir,
         effective_dir,
-        auto_paste,
-        keep_window_open,
-        page_size,
-        history_limit,
-        webdav_url,
-        webdav_username,
-        webdav_password,
-        webdav_sync_enabled,
+        auto_paste: conf.auto_paste,
+        keep_window_open: conf.keep_window_open,
+        always_on_top: conf.always_on_top,
+        page_size: conf.page_size,
+        history_limit: conf.history_limit,
+        webdav_url: conf.webdav_url,
+        webdav_username: conf.webdav_username,
+        webdav_password: conf.webdav_password,
+        webdav_sync_enabled: conf.webdav_sync_enabled,
+        device_name: sanitize_device_name(conf.device_name),
     })
 }
 
 #[tauri::command]
-pub async fn set_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
+pub async fn set_config(app: AppHandle, mut config: AppConfig) -> Result<(), String> {
+    config.device_name = sanitize_device_name(config.device_name);
     let conf_path = app.path().app_data_dir().unwrap().join("config.json");
     let data = serde_json::to_string(&config).map_err(|e| e.to_string())?;
     std::fs::write(&conf_path, data).map_err(|e| e.to_string())?;

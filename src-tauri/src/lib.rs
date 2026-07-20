@@ -1,6 +1,11 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use enigo::{Enigo, Key, KeyboardControllable};
-use tauri::Manager;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager,
+    WindowEvent,
+};
 
 mod commands;
 mod db;
@@ -8,8 +13,7 @@ mod pipeline;
 mod privacy;
 mod sync;
 
-#[tauri::command]
-fn simulate_paste() {
+fn simulate_paste_impl() {
     let mut enigo = Enigo::new();
 
     #[cfg(target_os = "macos")]
@@ -25,6 +29,11 @@ fn simulate_paste() {
         enigo.key_click(Key::Layout('v'));
         enigo.key_up(Key::Control);
     }
+}
+
+#[tauri::command]
+fn simulate_paste() {
+    simulate_paste_impl();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -77,6 +86,52 @@ pub fn run() {
                 Ok::<_, sqlx::Error>(pool)
             })?;
             app.manage(db::AppState { pool });
+
+            let show_item = MenuItem::with_id(app, "show", "Show EasyCP", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            TrayIconBuilder::new()
+                .icon(
+                    app.default_window_icon()
+                        .cloned()
+                        .ok_or("default window icon is missing")?,
+                )
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        if let Some(window) = tray.app_handle().get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = sync::run_startup_sync(app_handle).await {
+                    eprintln!("Startup WebDAV sync failed: {}", err);
+                }
+            });
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
@@ -84,6 +139,12 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             simulate_paste,
             commands::ingest_clipboard,

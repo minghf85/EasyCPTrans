@@ -188,3 +188,18 @@ cd src-tauri && cargo check
 - WebDAV 目前是手动触发、单向上传，不做远端回拉合并。
 - `read_clipboard_files` 与 `get_active_window` 依赖平台能力，Windows 支持最完整。
 - 隐私功能已经移除“一键重置并删除全部私密内容”的破坏性入口。
+
+## Window behavior (desktop)
+
+- EasyCP now behaves like a tray utility app.
+- Clicking the top-right `X` does not exit the app; it hides/minimizes the main window to tray.
+- Closing the window through system close actions also hides/minimizes instead of quitting.
+- To fully exit, use the tray icon menu (right-click tray icon -> `Quit`).
+
+## WebDAV multi-device sync
+
+- On app startup, if `webdavSyncEnabled=true`, EasyCP now runs automatic bidirectional sync.
+- It first pulls remote `*.json` entries from WebDAV and upserts new/updated records into local `clipboard_items`.
+- Then it uploads local non-private items by `content_hash` to WebDAV.
+- Manual "trigger sync" uses the same pull-then-push flow.
+- After pull/merge writes, the backend emits `clipboard-changed` so the UI reloads automatically.
