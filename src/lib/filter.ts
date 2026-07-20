@@ -1,6 +1,6 @@
 import type { HistoryItem } from "../types";
 
-export type Scope = "all" | "pinned" | "text" | "image" | "file" | "url" | "email";
+export type Scope = "all" | "pinned" | "text" | "image" | "file" | "url" | "code";
 
 export interface FilterState {
   search: string;
@@ -20,25 +20,36 @@ export const emptyFilter = (): FilterState => ({
   fileSize: [null, null],
 });
 
-export const isFilterActive = (f: FilterState): boolean => {
-  return !!(
-    f.search.trim() !== "" || 
-    f.scope !== "all" || 
-    f.activeTags.length > 0 || 
-    (f.timeRange && (f.timeRange[0] !== null || f.timeRange[1] !== null)) || 
-    (f.textLen && (f.textLen[0] !== null || f.textLen[1] !== null)) || 
+export const isFilterActive = (f: FilterState): boolean =>
+  !!(
+    f.search.trim() !== "" ||
+    f.scope !== "all" ||
+    f.activeTags.length > 0 ||
+    (f.timeRange && (f.timeRange[0] !== null || f.timeRange[1] !== null)) ||
+    (f.textLen && (f.textLen[0] !== null || f.textLen[1] !== null)) ||
     (f.fileSize && (f.fileSize[0] !== null || f.fileSize[1] !== null))
   );
-};
 
-/**
- * Pure filter — keeps List rendering decoupled from filter logic so it's easy
- * to add new filter dimensions (e.g. metadata-based) later without touching UI.
- */
-export function applyFilters(
-  items: HistoryItem[],
-  filter: FilterState,
-): HistoryItem[] {
+function isLikelyCode(item: HistoryItem): boolean {
+  if (item.contentType !== "text") return false;
+
+  const language = item.metadata?.language?.[0]?.toLowerCase() ?? "";
+  if (language) return true;
+
+  const sourceApp = item.metadata?.sourceApp?.[0]?.toLowerCase() ?? "";
+  if (/(code|visual studio|cursor|windsurf|terminal|powershell|cmd)/.test(sourceApp)) {
+    return true;
+  }
+
+  const text = item.content;
+  return (
+    /<\/?[a-z][^>]*>/i.test(text) ||
+    /\b(function|const|let|class|import|export|return|public|private|using|namespace)\b/.test(text) ||
+    /[{};]{2,}|=>/.test(text)
+  );
+}
+
+export function applyFilters(items: HistoryItem[], filter: FilterState): HistoryItem[] {
   const q = filter.search.trim().toLowerCase();
   const tagSet = new Set(filter.activeTags.map((t) => t.toLowerCase()));
 
@@ -52,11 +63,8 @@ export function applyFilters(
       const hasUrl = item.contentType === "text" && /https?:\/\/[^\s]+/i.test(item.content);
       if (!hasUrl) return false;
     }
-    
-    if (filter.scope === "email") {
-      const hasEmail = item.contentType === "text" && /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/i.test(item.content);
-      if (!hasEmail) return false;
-    }
+
+    if (filter.scope === "code" && !isLikelyCode(item)) return false;
 
     if (filter.timeRange) {
       const dateStr = item.createdAt ?? item.lastUsedAt ?? "";
@@ -102,10 +110,7 @@ export function applyFilters(
   });
 }
 
-/** Aggregate tags across history with counts, sorted by frequency desc. */
-export function aggregateTags(
-  items: HistoryItem[],
-): { tag: string; count: number }[] {
+export function aggregateTags(items: HistoryItem[]): { tag: string; count: number }[] {
   const map = new Map<string, number>();
   for (const item of items) {
     for (const t of item.tags) {

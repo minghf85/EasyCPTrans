@@ -22,26 +22,23 @@ export function TagsRow({
   if (tags.length === 0 && !isEditing) return null;
 
   return (
-    <div
-      className="flex flex-wrap gap-1.5 mb-2"
-      onClick={(e) => e.stopPropagation()}
-    >
+    <div className="mb-2 flex flex-nowrap gap-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
       {tags.map((tag) => (
         <span
           key={tag}
-          className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 text-xs rounded-full border border-blue-100"
+          className="inline-flex items-center gap-1 rounded-full border border-white/70 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-600"
         >
-          <Tag className="w-2.5 h-2.5" />
+          <Tag className="h-3 w-3 text-slate-400" />
           {tag}
           <button
             onClick={(e) => {
               e.stopPropagation();
               onRemove(tag);
             }}
-            className="hover:text-red-500 ml-0.5"
-            title="Remove tag"
+            className="rounded-full p-0.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-900"
+            title="Remove"
           >
-            <X className="w-2.5 h-2.5" />
+            <X className="h-3 w-3" />
           </button>
         </span>
       ))}
@@ -60,8 +57,8 @@ export function TagsRow({
             }
           }}
           onBlur={onCommit}
-          placeholder="tag…"
-          className="px-2 py-0.5 text-xs bg-white border border-blue-300 rounded-full focus:outline-none focus:ring-1 focus:ring-blue-400 w-20"
+          placeholder="tag"
+          className="w-24 rounded-full border border-slate-200/80 bg-white px-3 py-1 text-xs outline-none focus:border-slate-300 focus:ring-4 focus:ring-slate-200/60"
         />
       )}
     </div>

@@ -6,6 +6,7 @@ use crate::privacy::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use base64::Engine;
 use std::collections::{HashMap, HashSet};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -28,24 +29,6 @@ fn parse_tags(raw: Option<String>) -> Vec<String> {
 fn parse_metadata(raw: Option<String>) -> HashMap<String, Vec<String>> {
     raw.and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
-}
-
-fn default_device_name() -> String {
-    std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "This Device".to_string())
-}
-
-fn sanitize_device_name(value: String) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        default_device_name()
-    } else {
-        trimmed.to_string()
-    }
 }
 
 fn merge_unique_tags(existing: Vec<String>, incoming: Vec<String>) -> Vec<String> {
@@ -84,6 +67,10 @@ fn read_app_config(app: &AppHandle) -> AppConfig {
         webdav_password: "".to_string(),
         webdav_sync_enabled: false,
         device_name: default_device_name(),
+        window_width: None,
+        window_height: None,
+        window_x: None,
+        window_y: None,
     }
 }
 
@@ -127,17 +114,13 @@ pub async fn ingest_clipboard(
         }
     }
 
-    let mut raw = ClipboardItem {
+    let raw = ClipboardItem {
         content_type: payload.content_type,
         content: payload.content,
         source_app: None,
         metadata,
         tags: Vec::new(),
     };
-    let cfg = read_app_config(&app);
-    let device_tag = sanitize_device_name(cfg.device_name);
-    raw.tags.push(device_tag);
-
     let mut processed = match Pipeline::default().run(raw) {
         PipelineOutcome::Accepted(item) => item,
         PipelineOutcome::Dropped { interceptor, reason } => {
@@ -757,6 +740,30 @@ pub async fn get_active_window() -> Result<String, String> {
     Err("Not supported".to_string())
 }
 
+#[tauri::command]
+pub async fn save_temp_image(app: AppHandle, data_url: String) -> Result<String, String> {
+    let encoded = data_url
+        .split_once(',')
+        .map(|(_, value)| value)
+        .ok_or_else(|| "invalid data url".to_string())?;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| e.to_string())?;
+
+    let temp_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("temp");
+    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+    let filename = format!(
+        "clipboard-{}.png",
+        chrono::Utc::now().timestamp_millis()
+    );
+    let image_path = temp_dir.join(filename);
+    std::fs::write(&image_path, bytes).map_err(|e| e.to_string())?;
+
+    Ok(image_path.to_string_lossy().to_string())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
@@ -772,16 +779,24 @@ pub struct AppConfig {
     pub page_size: u32,
     #[serde(default = "default_history_limit")]
     pub history_limit: u32,
-    #[serde(default = "default_string")]
+    #[serde(default)]
     pub webdav_url: String,
-    #[serde(default = "default_string")]
+    #[serde(default)]
     pub webdav_username: String,
-    #[serde(default = "default_string")]
+    #[serde(default)]
     pub webdav_password: String,
     #[serde(default = "default_bool_false")]
     pub webdav_sync_enabled: bool,
     #[serde(default = "default_device_name")]
     pub device_name: String,
+    #[serde(default)]
+    pub window_width: Option<f64>,
+    #[serde(default)]
+    pub window_height: Option<f64>,
+    #[serde(default)]
+    pub window_x: Option<f64>,
+    #[serde(default)]
+    pub window_y: Option<f64>,
 }
 
 fn default_auto_paste() -> bool {
@@ -793,14 +808,14 @@ fn default_keep_window_open() -> bool {
 fn default_bool_false() -> bool {
     false
 }
-fn default_string() -> String {
-    "".to_string()
-}
 fn default_page_size() -> u32 {
     50
 }
 fn default_history_limit() -> u32 {
     5000
+}
+fn default_device_name() -> String {
+    "This Device".to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -820,6 +835,31 @@ pub struct ConfigResponse {
     pub webdav_password: String,
     pub webdav_sync_enabled: bool,
     pub device_name: String,
+    pub window_width: Option<f64>,
+    pub window_height: Option<f64>,
+    pub window_x: Option<f64>,
+    pub window_y: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PartialAppConfig {
+    pub cache_path: Option<String>,
+    pub shortcut: Option<String>,
+    pub auto_paste: Option<bool>,
+    pub keep_window_open: Option<bool>,
+    pub always_on_top: Option<bool>,
+    pub page_size: Option<u32>,
+    pub history_limit: Option<u32>,
+    pub webdav_url: Option<String>,
+    pub webdav_username: Option<String>,
+    pub webdav_password: Option<String>,
+    pub webdav_sync_enabled: Option<bool>,
+    pub device_name: Option<String>,
+    pub window_width: Option<f64>,
+    pub window_height: Option<f64>,
+    pub window_x: Option<f64>,
+    pub window_y: Option<f64>,
 }
 
 #[tauri::command]
@@ -848,15 +888,69 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
         webdav_username: conf.webdav_username,
         webdav_password: conf.webdav_password,
         webdav_sync_enabled: conf.webdav_sync_enabled,
-        device_name: sanitize_device_name(conf.device_name),
+        device_name: conf.device_name,
+        window_width: conf.window_width,
+        window_height: conf.window_height,
+        window_x: conf.window_x,
+        window_y: conf.window_y,
     })
 }
 
 #[tauri::command]
-pub async fn set_config(app: AppHandle, mut config: AppConfig) -> Result<(), String> {
-    config.device_name = sanitize_device_name(config.device_name);
+pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), String> {
     let conf_path = app.path().app_data_dir().unwrap().join("config.json");
-    let data = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+    let mut merged = read_app_config(&app);
+
+    if let Some(value) = config.cache_path {
+        merged.cache_path = value;
+    }
+    if let Some(value) = config.shortcut {
+        merged.shortcut = value;
+    }
+    if let Some(value) = config.auto_paste {
+        merged.auto_paste = value;
+    }
+    if let Some(value) = config.keep_window_open {
+        merged.keep_window_open = value;
+    }
+    if let Some(value) = config.always_on_top {
+        merged.always_on_top = value;
+    }
+    if let Some(value) = config.page_size {
+        merged.page_size = value;
+    }
+    if let Some(value) = config.history_limit {
+        merged.history_limit = value;
+    }
+    if let Some(value) = config.webdav_url {
+        merged.webdav_url = value;
+    }
+    if let Some(value) = config.webdav_username {
+        merged.webdav_username = value;
+    }
+    if let Some(value) = config.webdav_password {
+        merged.webdav_password = value;
+    }
+    if let Some(value) = config.webdav_sync_enabled {
+        merged.webdav_sync_enabled = value;
+    }
+    if let Some(value) = config.device_name {
+        merged.device_name = value;
+    }
+    if let Some(value) = config.window_width {
+        merged.window_width = Some(value);
+    }
+    if let Some(value) = config.window_height {
+        merged.window_height = Some(value);
+    }
+    if let Some(value) = config.window_x {
+        merged.window_x = Some(value);
+    }
+    if let Some(value) = config.window_y {
+        merged.window_y = Some(value);
+    }
+
+    let data = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
     std::fs::write(&conf_path, data).map_err(|e| e.to_string())?;
     Ok(())
 }

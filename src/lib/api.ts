@@ -59,11 +59,52 @@ export const api = {
 
   simulatePaste: () => invoke<void>("simulate_paste"),
 
-  getConfig: () => invoke<{ cachePath: string; shortcut: string; defaultDir: string; effectiveDir: string; autoPaste: boolean; keepWindowOpen: boolean; alwaysOnTop?: boolean; pageSize: number; historyLimit?: number; webdavUrl?: string; webdavUsername?: string; webdavPassword?: string; webdavSyncEnabled?: boolean; deviceName?: string } | null>("get_config").catch(() => null),
+  saveTempImage: (dataUrl: string) =>
+    invoke<string>("save_temp_image", { dataUrl }),
 
-  setConfig: (config: { cachePath: string; shortcut: string; autoPaste: boolean; keepWindowOpen: boolean; alwaysOnTop?: boolean; pageSize: number; historyLimit?: number; webdavUrl?: string; webdavUsername?: string; webdavPassword?: string; webdavSyncEnabled?: boolean; deviceName?: string }) => invoke("set_config", { config }),
-
-  verifyWebdav: (url: string, username: string, password?: string) => invoke<boolean>("verify_webdav", { url, username, password }),
+  verifyWebdav: (url: string, username: string, password?: string) =>
+    invoke<boolean>("verify_webdav", { url, username, password }),
 
   triggerSync: () => invoke<void>("trigger_sync"),
+
+  getConfig: () =>
+    invoke<{
+      cachePath: string;
+      shortcut: string;
+      defaultDir: string;
+      effectiveDir: string;
+      autoPaste: boolean;
+      keepWindowOpen: boolean;
+      alwaysOnTop?: boolean;
+      pageSize: number;
+      historyLimit?: number;
+      webdavUrl: string;
+      webdavUsername: string;
+      webdavPassword: string;
+      webdavSyncEnabled: boolean;
+      deviceName: string;
+      windowWidth?: number;
+      windowHeight?: number;
+      windowX?: number;
+      windowY?: number;
+    } | null>("get_config").catch(() => null),
+
+  setConfig: (config: {
+    cachePath?: string;
+    shortcut?: string;
+    autoPaste?: boolean;
+    keepWindowOpen?: boolean;
+    alwaysOnTop?: boolean;
+    pageSize?: number;
+    historyLimit?: number;
+    webdavUrl?: string;
+    webdavUsername?: string;
+    webdavPassword?: string;
+    webdavSyncEnabled?: boolean;
+    deviceName?: string;
+    windowWidth?: number;
+    windowHeight?: number;
+    windowX?: number;
+    windowY?: number;
+  }) => invoke("set_config", { config }),
 };

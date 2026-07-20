@@ -8,29 +8,53 @@ import type { HistoryItem } from "../types";
  * - 挂载时拉取一次（限制最大条数比如5000，防止SQLite和内存爆掉导致假死）
  * - 监听 Rust 端 "clipboard-changed" 广播，自动 reload
  */
-export function useHistory(onError: (msg: string) => void) {
+export function useHistory(
+  historyLimit: number,
+  onError: (msg: string) => void,
+) {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const onErrorRef = useRef(onError);
+  const reloadPendingRef = useRef(false);
+  const reloadInFlightRef = useRef(false);
+  const debounceTimerRef = useRef<number | null>(null);
   onErrorRef.current = onError;
 
   const reload = useCallback(async () => {
+    if (reloadInFlightRef.current) {
+      reloadPendingRef.current = true;
+      return;
+    }
+
+    reloadInFlightRef.current = true;
     try {
-      // Fetch up to a large reasonable limit in JS metadata, to allow filtering to work nicely globally
-      const cfg = await api.getConfig() as any;
-      const limit = cfg?.historyLimit || 5000;
-      const items = await api.loadHistory(limit);
+      const items = await api.loadHistory(historyLimit);
       setHistory(items);
     } catch (err) {
       onErrorRef.current("Load History Error: " + String(err));
+    } finally {
+      reloadInFlightRef.current = false;
+      if (reloadPendingRef.current) {
+        reloadPendingRef.current = false;
+        void reload();
+      }
     }
-  }, []);
+  }, [historyLimit]);
 
   useEffect(() => {
-    reload();
+    void reload();
     const unlistenP = listen("clipboard-changed", () => {
-      reload();
+      if (debounceTimerRef.current !== null) {
+        window.clearTimeout(debounceTimerRef.current);
+      }
+      debounceTimerRef.current = window.setTimeout(() => {
+        debounceTimerRef.current = null;
+        void reload();
+      }, 120);
     });
     return () => {
+      if (debounceTimerRef.current !== null) {
+        window.clearTimeout(debounceTimerRef.current);
+      }
       unlistenP.then((fn) => fn()).catch(() => {});
     };
   }, [reload]);

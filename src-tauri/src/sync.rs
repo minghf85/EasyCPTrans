@@ -46,6 +46,10 @@ fn parse_config(app: &AppHandle) -> Result<AppConfig, String> {
                 webdav_password: "".to_string(),
                 webdav_sync_enabled: false,
                 device_name: "This Device".to_string(),
+                window_width: None,
+                window_height: None,
+                window_x: None,
+                window_y: None,
             })
         }
     };

@@ -1,4 +1,4 @@
-import { Clock, SearchX } from "lucide-react";
+import { Clock3, SearchX } from "lucide-react";
 
 interface Props {
   filtered?: boolean;
@@ -6,26 +6,31 @@ interface Props {
 }
 
 export function EmptyState({ filtered, onClear }: Props) {
-  if (filtered) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-slate-400">
-        <SearchX className="w-12 h-12 mb-2 opacity-30" />
-        <p className="text-sm">No matches</p>
-        {onClear && (
-          <button
-            onClick={onClear}
-            className="mt-2 text-xs text-blue-500 hover:underline"
-          >
-            Clear filters
-          </button>
+  return (
+    <div className="flex h-full min-h-[220px] flex-col items-center justify-center px-8 text-center">
+      <div className="mb-4 rounded-full border border-[#e6e6e6] bg-white p-4 shadow-sm">
+        {filtered ? (
+          <SearchX className="h-8 w-8 text-slate-400" />
+        ) : (
+          <Clock3 className="h-8 w-8 text-slate-400" />
         )}
       </div>
-    );
-  }
-  return (
-    <div className="flex flex-col items-center justify-center h-full text-slate-400">
-      <Clock className="w-12 h-12 mb-2 opacity-20" />
-      <p className="text-sm">No clipboard history yet</p>
+      <p className="text-base font-medium text-slate-700">
+        {filtered ? "No matching clipboard items" : "Clipboard history will appear here"}
+      </p>
+      <p className="mt-2 max-w-sm text-sm text-slate-500">
+        {filtered
+          ? "Try a different keyword, tag, or clear the active filters."
+          : "Copy text, images, or files and EasyCP will capture them into this floating deck."}
+      </p>
+      {filtered && onClear && (
+        <button
+          onClick={onClear}
+          className="mt-5 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+        >
+          Clear filters
+        </button>
+      )}
     </div>
   );
 }

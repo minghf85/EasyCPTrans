@@ -1,99 +1,56 @@
-import { Check, Clock, Copy, EyeOff, Link, Mail, Monitor, PenSquare, Phone, Pin, Plus, Trash2 } from "lucide-react";
+import { useMemo, useState, type WheelEvent } from "react";
+import {
+  Check,
+  ChevronDown,
+  Clock3,
+  Copy,
+  EyeOff,
+  Folder,
+  Image as ImageIcon,
+  Monitor,
+  MousePointerClick,
+  PenSquare,
+  Pin,
+  Plus,
+  Shield,
+  Tag,
+  Trash2,
+} from "lucide-react";
 import { formatTime } from "../lib/time";
 import type { HistoryItem } from "../types";
 import { TagsRow } from "./TagsRow";
 
-function formatBytes(bytes: number, decimals = 2) {
-  if (!+bytes) return "0 Bytes";
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  if (i >= 2 && bytes > 100 * 1024 * 1024) {
-    return "> 100 MB";
-  }
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+function formatBytes(bytes: number, decimals = 1) {
+  if (!+bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const base = 1024;
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(base)));
+  return `${parseFloat((bytes / Math.pow(base, index)).toFixed(decimals))} ${units[index]}`;
 }
 
-interface ExtractedInfo {
-  type: "url" | "email" | "phone" | "ip" | "domain";
-  value: string;
+function detectLabel(item: HistoryItem) {
+  if (item.contentType === "image") return "Image";
+  if (item.contentType === "file") return "File";
+  const language = item.metadata?.language?.[0];
+  if (language) return language;
+  if (/<\/?[a-z][^>]*>/i.test(item.content)) return "HTML";
+  if (/\b(function|const|let|class|import|export|return)\b/.test(item.content)) return "Code";
+  return "Text";
 }
 
-function extractInfo(text: string): ExtractedInfo[] {
-  const extracted: ExtractedInfo[] = [];
-  const add = (type: ExtractedInfo["type"], value: string) => {
-    if (!extracted.find((e) => e.type === type && e.value === value)) {
-      extracted.push({ type, value });
-    }
-  };
-
-  // 更严格的域名匹配模式
-  const strictPatterns = {
-    // 通用顶级域名
-    generic: 'com|org|net|edu|gov|mil|int',
-    // 赞助顶级域名
-    sponsored: 'aero|asia|cat|coop|jobs|mobi|museum|post|pro|tel|travel|xxx',
-    // 基础设施顶级域名
-    infrastructure: 'arpa',
-    // 热门新顶级域名
-    newTLDs: 'top|xyz|site|online|shop|store|tech|space|app|dev|io|ai|me|tv|co|info|biz|club|work|design|art|blog|news|cloud|digital',
-    // 主要国别域名
-    country: 'cn|us|uk|jp|kr|ru|de|fr|it|es|au|ca|br|in|mx|nl|se|ch|tw|hk|mo|sg|my|th|vn|ph|id|tr'
-  };
-
-  const allTLDs = Object.values(strictPatterns).join('|');
-  
-  // 精确的URL匹配
-  const strictUrlRegex = new RegExp(
-    `\\b(?:https?://)?` +
-    `(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+` +
-    `(?:${allTLDs})` +
-    `(?::\\d{2,5})?` +
-    `(?:/[^\\s?#]*[^\\s?#.,;:!?)])?`,
-    'gi'
+function isCodeLike(item: HistoryItem) {
+  return (
+    item.contentType === "text" &&
+    !!(
+      item.metadata?.language?.[0] ||
+      /<\/?[a-z][^>]*>/i.test(item.content) ||
+      /\b(function|const|let|class|import|export|return|using|namespace|public|private)\b/.test(item.content)
+    )
   );
+}
 
-  const urls = text.match(strictUrlRegex);
-  if (urls) {
-    urls.forEach((u) => {
-      const fullUrl = u.startsWith('http') ? u : `https://${u}`;
-      add("url", fullUrl);
-    });
-  }
-
-  // 精确的邮箱匹配
-  const strictEmailRegex = new RegExp(
-    `\\b[a-zA-Z0-9][a-zA-Z0-9._%+-]{0,63}@` +
-    `(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+` +
-    `(?:${allTLDs})\\b`,
-    'gi'
-  );
-
-  const emails = text.match(strictEmailRegex);
-  if (emails) emails.forEach((e) => add("email", e));
-
-  // 严格的手机号匹配
-  const strictPhoneRegex = /(?:(?:\+|00)86\s*)?1(?:3\d{3}|5[^4\D]\d{2}|8\d{3}|7(?:[0-35-9]\d{2}|4[0-9]\d|41[0-9])|9[189]\d{2}|6[567]\d{2}|4[^0\D]\d{2})\d{6}/g;
-  const phones = text.match(strictPhoneRegex);
-  if (phones) phones.forEach((p) => add("phone", p));
-
-  // 严格的IP地址
-  const strictIPRegex = /\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\b/g;
-  const ips = text.match(strictIPRegex);
-  if (ips) ips.forEach((ip) => add("ip", ip));
-
-  // 精确的域名匹配
-  const strictDomainRegex = new RegExp(
-    `\\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+` +
-    `(?:${allTLDs})\\b`,
-    'gi'
-  );
-
-  const domains = text.match(strictDomainRegex);
-  if (domains) domains.forEach((d) => add("domain", d));
-
-  return extracted;
+function sourceApp(item: HistoryItem) {
+  return item.metadata?.sourceApp?.[0] || "EasyCPTrans";
 }
 
 interface Props {
@@ -102,8 +59,8 @@ interface Props {
   isCopied: boolean;
   isTagging: boolean;
   tagInput: string;
-  showExtracts?: boolean;
   onCopy: (item: HistoryItem | { id: number; content: string; contentType: "text" }) => void;
+  onPaste: (item: HistoryItem) => void;
   onTogglePin: (id: number) => void;
   onDelete: (id: number) => void;
   onAddTag: (id: number, tag: string) => void;
@@ -114,7 +71,6 @@ interface Props {
   onStopTag: () => void;
   onTagInputChange: (v: string) => void;
   onQuickEdit: (item: HistoryItem) => void;
-  onIngestExtract?: (content: string) => void;
 }
 
 export function ClipboardCard({
@@ -123,8 +79,8 @@ export function ClipboardCard({
   isCopied,
   isTagging,
   tagInput,
-  showExtracts,
   onCopy,
+  onPaste,
   onTogglePin,
   onDelete,
   onAddTag,
@@ -135,9 +91,16 @@ export function ClipboardCard({
   onStopTag,
   onTagInputChange,
   onQuickEdit,
-  onIngestExtract,
 }: Props) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const typeLabel = useMemo(() => detectLabel(item), [item]);
+  const codeLike = useMemo(() => isCodeLike(item), [item]);
+  const typeBadgeClass = codeLike ? "type-code" : `type-${item.contentType}`;
   const hasPrivacy = item.isPrivate;
+  const chars = item.metadata?.length?.[0];
+  const totalSize = item.metadata?.totalSize?.[0] ?? item.metadata?.size?.[0];
+  const width = item.metadata?.width?.[0];
+  const height = item.metadata?.height?.[0];
 
   const commitTag = () => {
     const trimmed = tagInput.trim();
@@ -145,216 +108,224 @@ export function ClipboardCard({
     onStopTag();
   };
 
-  return (
-    <div
-      id={`history-item-${item.id}`}
-      className={`group flex flex-col bg-white border rounded-xl p-3 shadow-sm hover:shadow-md hover:border-blue-300 active:scale-[0.99] transition-all cursor-pointer relative ${
-        isSelected ? "border-blue-500 ring-2 ring-blue-200" : "border-slate-200"
-      }`}
-      onClick={() => onCopy(item)}
-    >
-      {/* 内容 */}
-      <div className="text-sm font-medium text-slate-700 line-clamp-3 mb-2">
-        {item.contentType === "text" && (
-          <div
-            className={
-              hasPrivacy
-                ? "blur-md select-none tracking-wide text-slate-500"
-                : ""
-            }
-          >
-            {item.content}
-          </div>
-        )}
-        {item.contentType === "image" && (
-          <div className="flex justify-center bg-slate-100 rounded-md p-1">
-            {hasPrivacy || !item.content ? (
-              <div className="h-24 w-full flex items-center justify-center text-xs text-slate-500">
-                [已加密图片]
-              </div>
-            ) : (
-              <img
-                src={item.content}
-                alt="Clipboard content"
-                className="max-h-32 max-w-full object-contain shadow-sm transition-all"
-              />
-            )}
-          </div>
-        )}
-        {item.contentType === "file" && (
-          <div
-            className={`flex flex-col space-y-1 text-sm bg-slate-50 p-2 rounded border border-slate-100 ${
-              hasPrivacy ? "select-none" : ""
-            }`}
-          >
-            {item.content.split("\n").map((line, idx) => (
-              <div
-                key={idx}
-                className={`flex flex-row items-center text-slate-600 truncate ${
-                  hasPrivacy ? "blur-md text-slate-500" : ""
-                }`}
-              >
-                <span className="truncate flex-1">{line}</span>
-                {item.metadata?.sizes && item.metadata.sizes[idx] && (
-                  <span className="ml-2 text-xs text-slate-400 shrink-0">
-                    {formatBytes(parseInt(item.metadata.sizes[idx], 10))}
-                  </span>
+  const stopOuterScroll = (event: WheelEvent<HTMLElement>, axis: "x" | "y") => {
+    const node = event.currentTarget;
+    const delta = axis === "x" ? (event.deltaY !== 0 ? event.deltaY : event.deltaX) : event.deltaY;
+    if (delta === 0) return;
+
+    if (axis === "x") {
+      const maxScroll = node.scrollWidth - node.clientWidth;
+      if (maxScroll <= 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      node.scrollLeft = Math.max(0, Math.min(maxScroll, node.scrollLeft + delta));
+      return;
+    }
+
+    const maxScroll = node.scrollHeight - node.clientHeight;
+    if (maxScroll <= 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const next = node.scrollTop + delta;
+    node.scrollTop = Math.max(0, Math.min(maxScroll, next));
+  };
+
+  const renderBody = () => {
+    if (item.contentType === "image") {
+      return (
+        <div className="easycp-card-body easycp-card-body-image" onWheel={(event) => stopOuterScroll(event, "y")}>
+          {hasPrivacy || !item.content ? (
+            <div className="easycp-image-placeholder">
+              <ImageIcon className="h-8 w-8" />
+              <span>Private image</span>
+            </div>
+          ) : (
+            <img src={item.content} alt="Clipboard content" className="easycp-image-preview" />
+          )}
+        </div>
+      );
+    }
+
+    if (item.contentType === "file") {
+      const files = item.content.split("\n").filter(Boolean);
+      return (
+        <div className="easycp-card-body" onWheel={(event) => stopOuterScroll(event, "y")}>
+          <div className="easycp-file-stack">
+            {files.map((file, index) => (
+              <div key={`${item.id}-${index}`} className={`easycp-file-row ${hasPrivacy ? "is-private" : ""}`}>
+                <div className="easycp-file-main">
+                  <Folder className="h-4 w-4" />
+                  <span>{file}</span>
+                </div>
+                {item.metadata?.sizes?.[index] && (
+                  <span>{formatBytes(parseInt(item.metadata.sizes[index], 10))}</span>
                 )}
               </div>
             ))}
           </div>
-        )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="easycp-card-body" onWheel={(event) => stopOuterScroll(event, "y")}>
+        <div className={`easycp-content-surface ${codeLike ? "is-code" : ""}`}>
+          {codeLike ? (
+            <pre className={`easycp-code-content ${hasPrivacy ? "is-private" : ""}`}>{item.content || "Empty text item"}</pre>
+          ) : (
+            <div className={`easycp-text-content ${hasPrivacy ? "is-private" : ""}`}>{item.content || "Empty text item"}</div>
+          )}
+        </div>
       </div>
+    );
+  };
 
-      {showExtracts && item.contentType === "text" && !hasPrivacy && (
-        <div className="flex flex-wrap gap-2 mb-2">
-          {extractInfo(item.content).map((extract, idx) => (
-            <div
-              key={idx}
-              className="flex items-center text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-600 hover:bg-slate-100 hover:border-slate-300 transition-colors group/extract"
-              onClick={(e) => {
-                e.stopPropagation();
-                onCopy({ id: 0, content: extract.value, contentType: "text" });
-              }}
-              title="Click to paste directly"
-            >
-              {extract.type === "url" && <Link className="w-3 h-3 mr-1" />}
-              {extract.type === "email" && <Mail className="w-3 h-3 mr-1" />}
-              {extract.type === "phone" && <Phone className="w-3 h-3 mr-1" />}
-              <span className="truncate max-w-[150px]">{extract.value}</span>
-              <button
-                className="ml-2 opacity-0 group-hover/extract:opacity-100 text-slate-400 hover:text-blue-500 transition-opacity"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onIngestExtract?.(extract.value);
-                }}
-                title="Save as new clipboard item"
-              >
-                <Plus className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <TagsRow
-        tags={item.tags}
-        isEditing={isTagging}
-        inputValue={tagInput}
-        onInputChange={onTagInputChange}
-        onCommit={commitTag}
-        onCancel={onStopTag}
-        onRemove={(tag) => onRemoveTag(item.id, tag)}
-      />
-
-      {/* 底部信息 + 操作 */}
-      <div className="flex items-center justify-between text-xs text-slate-400 mt-1">
-        <div className="flex items-center space-x-1">
-          <Clock className="w-3 h-3" />
-          <span title={item.lastUsedAt ?? ""}>{formatTime(item.lastUsedAt)}</span>
-            {item.useCount > 1 && (
-            <span className="ml-1 text-slate-400">·×{item.useCount}</span>
-          )}
-          {item.metadata?.length && (
-            <span className="ml-1 text-slate-400">· {item.metadata.length[0]} chars</span>
-          )}
-          {item.metadata?.width && item.metadata?.height && (
-            <span className="ml-1 text-slate-400">· {item.metadata.width[0]}x{item.metadata.height[0]}</span>
-          )}
-          {item.metadata?.size && (
-            <span className="ml-1 text-slate-400">· {formatBytes(parseInt(item.metadata.size[0], 10))}</span>
-          )}
-          {item.metadata?.totalSize && (
-            <span className="ml-1 text-slate-400">· {formatBytes(parseInt(item.metadata.totalSize[0], 10))}</span>
-          )}
-          {item.metadata?.sourceApp && item.metadata.sourceApp[0] && (
-            <span className="ml-1 text-slate-400 truncate max-w-[120px] inline-block align-bottom" title={`来源: ${item.metadata.sourceApp[0]}`}>
-              · <Monitor className="w-3 h-3 inline-block -mt-1 mx-0.5" />{item.metadata.sourceApp[0]}
-            </span>
-          )}
+  return (
+    <article
+      id={`history-item-${item.id}`}
+      className={`easycp-card ${isSelected ? "selected" : ""}`}
+      onClick={() => onCopy(item)}
+    >
+      <div className="easycp-card-head">
+        <div className="easycp-card-app">
+          <span className="easycp-card-appicon">
+            <Monitor className="h-3.5 w-3.5" />
+          </span>
+          <span className="easycp-card-appname">{sourceApp(item)}</span>
         </div>
 
-        <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
-          {item.contentType === "text" && !hasPrivacy && (
+        <button
+          className={`easycp-more-btn ${menuOpen ? "active" : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenuOpen((prev) => !prev);
+          }}
+          title="More actions"
+        >
+          <ChevronDown className="easycp-more-icon h-4 w-4" />
+        </button>
+
+        {menuOpen && (
+          <div
+            className="easycp-card-menu"
+            onClick={(e) => e.stopPropagation()}
+            onWheel={(event) => stopOuterScroll(event, "y")}
+          >
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onQuickEdit(item);
+              onClick={() => {
+                setMenuOpen(false);
+                onPaste(item);
               }}
-              className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-indigo-500"
-              title="快速编辑"
             >
-              <PenSquare className="w-3.5 h-3.5" />
+              <MousePointerClick className="h-3.5 w-3.5" />
+              Paste
             </button>
-          )}
-          <button
-              onClick={(e) => {
-                e.stopPropagation();
+            <button
+              onClick={() => {
+                setMenuOpen(false);
+                onCopy(item);
+              }}
+            >
+              {isCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              Copy
+            </button>
+            <button
+              onClick={() => {
+                setMenuOpen(false);
+                onTogglePin(item.id);
+              }}
+            >
+              <Pin className="h-3.5 w-3.5" />
+              {item.pinned ? "Unpin" : "Pin"}
+            </button>
+            <button
+              onClick={() => {
+                setMenuOpen(false);
+                if (isTagging) onStopTag();
+                else onStartTag(item.id);
+              }}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Tag
+            </button>
+            <button
+              onClick={() => {
+                setMenuOpen(false);
                 if (hasPrivacy) onDisablePrivacy(item.id);
                 else onEnablePrivacy(item.id);
               }}
-            className={`p-1.5 rounded hover:bg-slate-100 ${
-              hasPrivacy ? "text-amber-500" : "text-slate-400 hover:text-amber-500"
-            }`}
-            title={hasPrivacy ? "输入密码解密并移除隐私" : "添加隐私标签（无需输入密码）"}
-          >
-            <EyeOff className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              if (isTagging) onStopTag();
-              else onStartTag(item.id);
-            }}
-            className={`p-1.5 rounded hover:bg-slate-100 ${
-              isTagging ? "text-blue-500" : "text-slate-400 hover:text-blue-500"
-            }`}
-            title="Add tag"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onTogglePin(item.id);
-            }}
-            className={`p-1.5 rounded hover:bg-slate-100 ${
-              item.pinned ? "text-blue-500" : "text-slate-400"
-            }`}
-            title="Pin"
-          >
-            <Pin className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onCopy(item);
-            }}
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-blue-500"
-            title="Copy"
-          >
-            {isCopied ? (
-              <Check className="w-3.5 h-3.5 text-green-500" />
-            ) : (
-              <Copy className="w-3.5 h-3.5" />
+            >
+              {hasPrivacy ? <Shield className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+              {hasPrivacy ? "Unlock" : "Private"}
+            </button>
+            {item.contentType === "text" && !hasPrivacy && (
+              <button
+                onClick={() => {
+                  setMenuOpen(false);
+                  onQuickEdit(item);
+                }}
+              >
+                <PenSquare className="h-3.5 w-3.5" />
+                Edit
+              </button>
             )}
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete(item.id);
-            }}
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-500"
-            title="Delete"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+            <button
+              className="danger"
+              onClick={() => {
+                setMenuOpen(false);
+                onDelete(item.id);
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
+            </button>
+          </div>
+        )}
       </div>
 
-      {item.pinned && (
-        <Pin className="absolute top-2 right-2 w-3 h-3 text-blue-500 transform rotate-45" />
+      {renderBody()}
+
+      {isTagging && (
+        <div className="easycp-tags-wrap" onClick={(e) => e.stopPropagation()} onWheel={(event) => stopOuterScroll(event, "x")}>
+          <TagsRow
+            tags={[]}
+            isEditing={isTagging}
+            inputValue={tagInput}
+            onInputChange={onTagInputChange}
+            onCommit={commitTag}
+            onCancel={onStopTag}
+            onRemove={(tag) => onRemoveTag(item.id, tag)}
+          />
+        </div>
       )}
-    </div>
+
+      <div className="easycp-meta-strip" onClick={(e) => e.stopPropagation()} onWheel={(event) => stopOuterScroll(event, "x")}>
+        <span className={`easycp-meta-item easycp-type-badge ${typeBadgeClass}`}>{typeLabel}</span>
+        <span className="easycp-meta-item">
+          <Clock3 className="h-3 w-3" />
+          {formatTime(item.lastUsedAt)}
+        </span>
+        {chars && <span className="easycp-meta-item">{chars} chars</span>}
+        {width && height && <span className="easycp-meta-item">{width} x {height}</span>}
+        {totalSize && <span className="easycp-meta-item">{formatBytes(parseInt(totalSize, 10))}</span>}
+        {item.pinned && (
+          <span className="easycp-meta-item">
+            <Pin className="h-3 w-3" />
+            Pinned
+          </span>
+        )}
+        {hasPrivacy && (
+          <span className="easycp-meta-item">
+            <EyeOff className="h-3 w-3" />
+            Private
+          </span>
+        )}
+        {item.tags.map((tag) => (
+          <span key={tag} className="easycp-tag-chip">
+            <Tag className="h-3 w-3" />#{tag}
+          </span>
+        ))}
+      </div>
+    </article>
   );
 }

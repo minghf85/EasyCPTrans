@@ -8,11 +8,7 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "clipboard-manager:default",
-    "clipboard-manager:allow-read-text",
-    "clipboard-manager:allow-write-text",
-    "clipboard-manager:allow-read-image",
-    "clipboard-manager:allow-write-image",
+    "clipboard-next:default",
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-set-focus",
