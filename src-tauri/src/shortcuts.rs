@@ -222,7 +222,7 @@ async fn load_recent_item<R: Runtime>(
     let row = sqlx::query(
         "SELECT id, content_type, preview_text, storage_path, is_private
          FROM clipboard_items
-         ORDER BY is_pinned DESC, last_used_at DESC, created_at DESC
+         ORDER BY is_pinned DESC, id DESC
          LIMIT 1 OFFSET ?1",
     )
     .bind(index as i64)
@@ -407,7 +407,6 @@ async fn execute_recent_paste<R: Runtime>(app: AppHandle<R>, index: usize) -> Re
         "[EasyCPTrans] Quick paste wrote clipboard for item {}",
         item.id
     );
-    let _ = mark_item_used(&app, item.id).await;
 
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();

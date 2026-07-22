@@ -77,6 +77,13 @@ pub async fn ensure_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_clipboard_items_pinned_id
+         ON clipboard_items(is_pinned DESC, id DESC)",
+    )
+    .execute(pool)
+    .await?;
+
     backfill_hashes(pool).await?;
 
     Ok(())

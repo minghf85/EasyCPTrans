@@ -376,7 +376,7 @@ pub async fn load_history(
         "SELECT id, content_type, preview_text, storage_path, created_at, last_used_at,
                 use_count, is_pinned, is_private, tags, metadata
          FROM clipboard_items
-         ORDER BY is_pinned DESC, last_used_at DESC, created_at DESC
+         ORDER BY is_pinned DESC, id DESC
          LIMIT ?1",
     )
     .bind(limit)
