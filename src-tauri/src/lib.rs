@@ -267,30 +267,6 @@ pub fn run() {
             std::fs::create_dir_all(&app_data).ok();
             println!("APP DATA DIR: {:?}", app_data);
 
-            let old_app_data = app_data.parent().unwrap().join("com.easycut.app");
-            if old_app_data.exists()
-                && old_app_data.join("clipboard.db").exists()
-                && !app_data.join("clipboard.db").exists()
-            {
-                println!("Migrating data from {:?}", old_app_data);
-                let _ = std::fs::copy(
-                    old_app_data.join("clipboard.db"),
-                    app_data.join("clipboard.db"),
-                );
-                let _ = std::fs::copy(
-                    old_app_data.join("clipboard.db-shm"),
-                    app_data.join("clipboard.db-shm"),
-                );
-                let _ = std::fs::copy(
-                    old_app_data.join("clipboard.db-wal"),
-                    app_data.join("clipboard.db-wal"),
-                );
-                let _ = std::fs::copy(
-                    old_app_data.join("config.json"),
-                    app_data.join("config.json"),
-                );
-            }
-
             let conf_path = app_data.join("config.json");
             let mut custom_cache_path = None;
             if let Ok(data) = std::fs::read_to_string(&conf_path) {
@@ -305,19 +281,6 @@ pub fn run() {
 
             let final_db_dir = if let Some(ref cp) = custom_cache_path {
                 std::fs::create_dir_all(cp).ok();
-                // 如果启用了自定义路径且该路径下无 db，则从默认路径迁移过去
-                if !cp.join("clipboard.db").exists() && app_data.join("clipboard.db").exists() {
-                    println!("Migrating database to custom cache path: {:?}", cp);
-                    let _ = std::fs::copy(app_data.join("clipboard.db"), cp.join("clipboard.db"));
-                    let _ = std::fs::copy(
-                        app_data.join("clipboard.db-shm"),
-                        cp.join("clipboard.db-shm"),
-                    );
-                    let _ = std::fs::copy(
-                        app_data.join("clipboard.db-wal"),
-                        cp.join("clipboard.db-wal"),
-                    );
-                }
                 cp.clone()
             } else {
                 app_data.clone()
