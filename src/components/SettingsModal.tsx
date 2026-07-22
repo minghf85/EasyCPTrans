@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Cloud, Folder, RefreshCw, Shield } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
@@ -6,6 +6,9 @@ import { api } from "../lib/api";
 interface Props {
   onSaved: (settings: {
     shortcut: string;
+    queueStepShortcut: string;
+    quickPastePrefix: string;
+    stackShortcutPrefix: string;
     autoPaste: boolean;
     keepWindowOpen: boolean;
     alwaysOnTop: boolean;
@@ -18,9 +21,231 @@ interface Props {
   }) => void;
 }
 
+function normalizeShortcutValue(value: string | null | undefined, fallback: string) {
+  const trimmed = value?.trim() ?? "";
+  return trimmed || fallback;
+}
+
+function normalizeKeyboardKey(key: string) {
+  if (key === " ") return "Space";
+  if (key === "Escape") return "Esc";
+  if (key === "ArrowUp") return "Up";
+  if (key === "ArrowDown") return "Down";
+  if (key === "ArrowLeft") return "Left";
+  if (key === "ArrowRight") return "Right";
+  if (key.length === 1) return key.toUpperCase();
+  return key;
+}
+
+function canonicalizeShortcut(value: string) {
+  const normalized = value
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase();
+      if (["ctrl", "control", "commandorcontrol", "cmdorctrl", "cmdorcontrol"].includes(lower)) {
+        return "CommandOrControl";
+      }
+      if (["alt", "option"].includes(lower)) {
+        return "Alt";
+      }
+      if (["shift"].includes(lower)) {
+        return "Shift";
+      }
+      if (["super", "meta", "win", "windows", "command", "cmd"].includes(lower)) {
+        return "Super";
+      }
+      if (lower === "escape") return "Esc";
+      if (lower === "arrowup") return "Up";
+      if (lower === "arrowdown") return "Down";
+      if (lower === "arrowleft") return "Left";
+      if (lower === "arrowright") return "Right";
+      if (lower === " ") return "Space";
+      if (part.length === 1) return part.toUpperCase();
+      return part;
+    });
+
+  const modifierOrder = ["CommandOrControl", "Super", "Alt", "Shift"];
+  const modifiers = normalized
+    .filter((part) => modifierOrder.includes(part))
+    .sort((a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b));
+  const keys = normalized.filter((part) => !modifierOrder.includes(part));
+  return [...modifiers, ...keys].join("+");
+}
+
+function formatShortcutFromEvent(event: KeyboardEvent) {
+  const modifiers: string[] = [];
+  if (event.metaKey) modifiers.push("Super");
+  if (event.ctrlKey) modifiers.push("CommandOrControl");
+  if (event.altKey) modifiers.push("Alt");
+  if (event.shiftKey) modifiers.push("Shift");
+
+  const key = normalizeKeyboardKey(event.key);
+  if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) {
+    return canonicalizeShortcut(modifiers.join("+"));
+  }
+  return canonicalizeShortcut([...modifiers, key].filter(Boolean).join("+"));
+}
+
+function isModifierKey(key: string) {
+  return key === "Control" || key === "Shift" || key === "Alt" || key === "Meta";
+}
+
+function ShortcutRecorder({
+  label,
+  value,
+  defaultValue,
+  onChange,
+  checkAvailability,
+  help,
+  allowModifierOnly = false,
+}: {
+  label: string;
+  value: string;
+  defaultValue: string;
+  onChange: (value: string) => void;
+  checkAvailability?: (value: string) => Promise<boolean>;
+  help: string;
+  allowModifierOnly?: boolean;
+}) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [status, setStatus] = useState<string>("");
+  const [draftValue, setDraftValue] = useState("");
+  const displayValue = value.trim() || "Disabled";
+
+  useEffect(() => {
+    if (!recording) return;
+    const handleKeyDown = async (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === "Escape") {
+        setDraftValue("");
+        setStatus("Recording cancelled.");
+        setRecording(false);
+        return;
+      }
+      if (event.key === "Backspace" || event.key === "Delete") {
+        setDraftValue("");
+        onChange("");
+        setRecording(false);
+        return;
+      }
+
+      const nextValue = formatShortcutFromEvent(event);
+      if (!nextValue) return;
+      if (allowModifierOnly) {
+        if (isModifierKey(event.key)) {
+          setDraftValue(canonicalizeShortcut(nextValue));
+          setStatus("Press Enter to confirm this modifier prefix.");
+          return;
+        }
+        if (event.key === "Enter") {
+          if (!draftValue.trim()) {
+            setStatus("Press one or more modifier keys first.");
+            return;
+          }
+          onChange(canonicalizeShortcut(draftValue));
+          setDraftValue("");
+          setStatus("Recorded. Save settings to apply.");
+          setRecording(false);
+          return;
+        }
+        setStatus("Quick paste prefix only accepts modifier keys. Press Enter to confirm.");
+        return;
+      }
+
+      if (isModifierKey(event.key)) {
+        setStatus("Press a non-modifier key to finish the shortcut.");
+        return;
+      }
+      if (!nextValue.includes("+")) {
+        setStatus("Use at least one modifier key.");
+        return;
+      }
+
+      const canonical = canonicalizeShortcut(nextValue);
+      if (checkAvailability && canonical !== canonicalizeShortcut(value)) {
+        const available = await checkAvailability(canonical).catch(() => false);
+        if (!available) {
+          setStatus("Shortcut is already registered. Try another combination.");
+          return;
+        }
+      }
+
+      onChange(canonical);
+      setDraftValue("");
+      setStatus("Recorded. Save settings to apply.");
+      setRecording(false);
+    };
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && rootRef.current?.contains(target)) return;
+      setDraftValue("");
+      setStatus("Recording cancelled.");
+      setRecording(false);
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("mousedown", handlePointerDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("mousedown", handlePointerDown, true);
+    };
+  }, [recording, allowModifierOnly, onChange, checkAvailability, draftValue, value]);
+
+  return (
+    <div className="easycp-field" ref={rootRef}>
+      <span>{label}</span>
+      <div className="easycp-shortcut-recorder">
+        <div className={`easycp-shortcut-display ${recording ? "recording" : ""}`}>
+          {recording
+            ? allowModifierOnly
+              ? draftValue || "Press modifier keys, then Enter..."
+              : "Press keys..."
+            : displayValue}
+        </div>
+        <button
+          type="button"
+          className="easycp-secondary-btn"
+          onClick={() => {
+            setDraftValue("");
+            setStatus("");
+            setRecording((prev) => !prev);
+          }}
+        >
+          {recording ? "Cancel" : "Record"}
+        </button>
+        <button
+          type="button"
+          className="easycp-secondary-btn"
+          onClick={() => onChange("")}
+        >
+          Clear
+        </button>
+        <button
+          type="button"
+          className="easycp-secondary-btn"
+          onClick={() => onChange(defaultValue)}
+        >
+          Default
+        </button>
+      </div>
+      <small>{help}</small>
+      {status && <small>{status}</small>}
+    </div>
+  );
+}
+
 export function SettingsModal({ onSaved }: Props) {
   const [cachePath, setCachePath] = useState("");
-  const [shortcut, setShortcut] = useState("CommandOrControl+Shift+E");
+  const [shortcut, setShortcut] = useState("CommandOrControl+Shift+V");
+  const [queueStepShortcut, setQueueStepShortcut] = useState("CommandOrControl+Alt+V");
+  const [quickPastePrefix, setQuickPastePrefix] = useState("Super+Shift");
+  const [stackShortcutPrefix, setStackShortcutPrefix] = useState("CommandOrControl+Alt");
   const [effectiveDir, setEffectiveDir] = useState("");
   const [autoPaste, setAutoPaste] = useState(true);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
@@ -49,6 +274,26 @@ export function SettingsModal({ onSaved }: Props) {
   const [securityAnswer, setSecurityAnswer] = useState("");
   const [privacyBusy, setPrivacyBusy] = useState(false);
   const [privacyMessage, setPrivacyMessage] = useState("");
+  const quickPastePrefixWarning =
+    /^super$/i.test(quickPastePrefix.trim())
+      ? "Using Win alone as the quick paste modifier is likely to conflict with system shortcuts."
+      : "";
+  const normalizedShortcut = useMemo(
+    () => normalizeShortcutValue(shortcut, "CommandOrControl+Shift+V"),
+    [shortcut],
+  );
+  const normalizedQueueStepShortcut = useMemo(
+    () => normalizeShortcutValue(queueStepShortcut, "CommandOrControl+Alt+V"),
+    [queueStepShortcut],
+  );
+  const normalizedQuickPastePrefix = useMemo(
+    () => normalizeShortcutValue(quickPastePrefix, "Super+Shift"),
+    [quickPastePrefix],
+  );
+  const normalizedStackShortcutPrefix = useMemo(
+    () => normalizeShortcutValue(stackShortcutPrefix, "CommandOrControl+Alt"),
+    [stackShortcutPrefix],
+  );
 
   useEffect(() => {
     api
@@ -56,7 +301,31 @@ export function SettingsModal({ onSaved }: Props) {
       .then((cfg) => {
         if (!cfg) return;
         setCachePath(cfg.cachePath || "");
-        setShortcut(cfg.shortcut || "CommandOrControl+Shift+E");
+        const nextShortcutRaw = normalizeShortcutValue(cfg.shortcut, "CommandOrControl+Shift+V");
+        const nextShortcut =
+          canonicalizeShortcut(nextShortcutRaw) === "Super+Shift+V"
+            ? "CommandOrControl+Shift+V"
+            : nextShortcutRaw;
+        const nextQueueStepShortcut = normalizeShortcutValue(cfg.queueStepShortcut, "CommandOrControl+Alt+V");
+        const nextQuickPastePrefix = normalizeShortcutValue(cfg.quickPastePrefix, "Super+Shift");
+        const nextStackShortcutPrefix = normalizeShortcutValue(cfg.stackShortcutPrefix, "CommandOrControl+Alt");
+        setShortcut(canonicalizeShortcut(nextShortcut));
+        setQueueStepShortcut(canonicalizeShortcut(nextQueueStepShortcut));
+        setQuickPastePrefix(canonicalizeShortcut(nextQuickPastePrefix));
+        setStackShortcutPrefix(canonicalizeShortcut(nextStackShortcutPrefix));
+        if (
+          nextShortcut !== (cfg.shortcut ?? "") ||
+          nextQueueStepShortcut !== (cfg.queueStepShortcut ?? "") ||
+          nextQuickPastePrefix !== (cfg.quickPastePrefix ?? "") ||
+          nextStackShortcutPrefix !== (cfg.stackShortcutPrefix ?? "")
+        ) {
+          void api.setConfig({
+            shortcut: canonicalizeShortcut(nextShortcut),
+            queueStepShortcut: canonicalizeShortcut(nextQueueStepShortcut),
+            quickPastePrefix: canonicalizeShortcut(nextQuickPastePrefix),
+            stackShortcutPrefix: canonicalizeShortcut(nextStackShortcutPrefix),
+          }).catch(console.error);
+        }
         setEffectiveDir(cfg.effectiveDir || "");
         setWebdavUrl(cfg.webdavUrl || "");
         setWebdavUsername(cfg.webdavUsername || "");
@@ -90,7 +359,10 @@ export function SettingsModal({ onSaved }: Props) {
     try {
       await api.setConfig({
         cachePath,
-        shortcut,
+        shortcut: normalizedShortcut,
+        queueStepShortcut: normalizedQueueStepShortcut,
+        quickPastePrefix: normalizedQuickPastePrefix,
+        stackShortcutPrefix: normalizedStackShortcutPrefix,
         autoPaste,
         keepWindowOpen: false,
         alwaysOnTop,
@@ -102,8 +374,12 @@ export function SettingsModal({ onSaved }: Props) {
         deviceName,
         ...(webdavPassword.trim() ? { webdavPassword: webdavPassword.trim() } : {}),
       });
+      const shortcutReport = await api.refreshGlobalShortcuts();
       onSaved({
-        shortcut,
+        shortcut: normalizedShortcut,
+        queueStepShortcut: normalizedQueueStepShortcut,
+        quickPastePrefix: normalizedQuickPastePrefix,
+        stackShortcutPrefix: normalizedStackShortcutPrefix,
         autoPaste,
         keepWindowOpen: false,
         alwaysOnTop,
@@ -115,7 +391,15 @@ export function SettingsModal({ onSaved }: Props) {
         deviceName,
       });
       setWebdavPassword("");
-      setMessage("Settings saved.");
+      if (shortcutReport.failed.length > 0) {
+        setMessage(
+          `Settings saved, but some shortcuts failed: ${shortcutReport.failed
+            .map((item) => `${item.shortcut} (${item.reason})`)
+            .join(" | ")}`,
+        );
+      } else {
+        setMessage("Settings saved.");
+      }
     } catch (err) {
       setMessage("Save failed: " + String(err));
     } finally {
@@ -238,10 +522,42 @@ export function SettingsModal({ onSaved }: Props) {
             {effectiveDir && <small>Current path: {effectiveDir}</small>}
           </label>
 
-          <label className="easycp-field">
-            <span>Global shortcut</span>
-            <input type="text" value={shortcut} onChange={(e) => setShortcut(e.target.value)} />
-          </label>
+          <ShortcutRecorder
+            label="Global shortcut"
+            value={shortcut}
+            defaultValue="CommandOrControl+Shift+V"
+            onChange={setShortcut}
+            checkAvailability={api.probeShortcutAvailable}
+            help="Click Record, then press the full combination. Backspace/Delete clears it."
+          />
+
+          <ShortcutRecorder
+            label="Queue step shortcut"
+            value={queueStepShortcut}
+            defaultValue="CommandOrControl+Alt+V"
+            onChange={setQueueStepShortcut}
+            checkAvailability={api.probeShortcutAvailable}
+            help="Used to paste queued items one by one."
+          />
+
+          <ShortcutRecorder
+            label="Quick paste prefix"
+            value={quickPastePrefix}
+            defaultValue="Super+Shift"
+            onChange={setQuickPastePrefix}
+            help="This modifier prefix combines with F1-F10 for quick paste."
+            allowModifierOnly
+          />
+
+          <ShortcutRecorder
+            label="Stack shortcut prefix"
+            value={stackShortcutPrefix}
+            defaultValue="CommandOrControl+Alt"
+            onChange={setStackShortcutPrefix}
+            help="This modifier prefix combines with Up/Down to start or cancel stacking."
+            allowModifierOnly
+          />
+          {quickPastePrefixWarning && <div className="easycp-settings-msg">{quickPastePrefixWarning}</div>}
 
           <label className="easycp-checkrow">
             <input type="checkbox" checked={autoPaste} onChange={(e) => setAutoPaste(e.target.checked)} />

@@ -4,9 +4,9 @@ use crate::privacy::{
     decrypt_content, encrypt_content, has_password, has_security_question, load_privacy_config,
     save_privacy_config, set_password, PrivacyStatus,
 };
+use base64::Engine;
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::Row;
-use base64::Engine;
 use std::collections::{HashMap, HashSet};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -45,6 +45,65 @@ fn merge_unique_tags(existing: Vec<String>, incoming: Vec<String>) -> Vec<String
         }
     }
     result
+}
+
+fn data_url_byte_len(value: &str) -> Option<usize> {
+    let encoded = value.split_once(',')?.1.trim();
+    if encoded.is_empty() {
+        return Some(0);
+    }
+    let padding = if encoded.ends_with("==") {
+        2
+    } else if encoded.ends_with('=') {
+        1
+    } else {
+        0
+    };
+    Some((encoded.len() * 3 / 4).saturating_sub(padding))
+}
+
+fn enrich_size_metadata(
+    content_type: &str,
+    content: &str,
+    metadata: &mut HashMap<String, Vec<String>>,
+) {
+    if content_type == "file" {
+        let sizes = content
+            .lines()
+            .map(|path| {
+                std::fs::metadata(path.trim())
+                    .map(|item| item.len())
+                    .unwrap_or(0)
+            })
+            .collect::<Vec<_>>();
+        if sizes.is_empty() {
+            return;
+        }
+        let total = sizes.iter().sum::<u64>();
+        let current_total = metadata
+            .get("totalSize")
+            .and_then(|values| values.first())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        if current_total == 0 {
+            metadata.insert(
+                "sizes".to_string(),
+                sizes.iter().map(|size| size.to_string()).collect(),
+            );
+            metadata.insert("totalSize".to_string(), vec![total.to_string()]);
+        }
+    } else if content_type == "image" {
+        let current_size = metadata
+            .get("size")
+            .and_then(|values| values.first())
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        if current_size == 0 {
+            if let Some(size) = data_url_byte_len(content) {
+                metadata.insert("size".to_string(), vec![size.to_string()]);
+            }
+        }
+    }
 }
 
 const DEFAULT_TAG_COLOR: &str = "#0f6cbd";
@@ -88,10 +147,7 @@ fn normalize_managed_tags(items: Vec<ManagedTagConfigInput>) -> Vec<ManagedTagCo
         if cleaned.is_empty() {
             continue;
         }
-        let key = tag
-            .id
-            .clone()
-            .unwrap_or_else(|| cleaned.to_lowercase());
+        let key = tag.id.clone().unwrap_or_else(|| cleaned.to_lowercase());
         if seen.insert(key) {
             normalized.push(ManagedTagConfig {
                 id: tag.id,
@@ -125,7 +181,7 @@ where
     Ok(normalize_managed_tags(raw))
 }
 
-fn read_app_config(app: &AppHandle) -> AppConfig {
+pub(crate) fn read_app_config(app: &AppHandle) -> AppConfig {
     let conf_path = app.path().app_data_dir().unwrap().join("config.json");
     if let Ok(data) = std::fs::read_to_string(&conf_path) {
         if let Ok(conf) = serde_json::from_str::<AppConfig>(&data) {
@@ -134,7 +190,11 @@ fn read_app_config(app: &AppHandle) -> AppConfig {
     }
     AppConfig {
         cache_path: "".to_string(),
-        shortcut: "CommandOrControl+Shift+E".to_string(),
+        shortcut: "CommandOrControl+Shift+V".to_string(),
+        plain_paste_shortcut: default_plain_paste_shortcut(),
+        queue_step_shortcut: default_queue_step_shortcut(),
+        quick_paste_prefix: default_quick_paste_prefix(),
+        stack_shortcut_prefix: default_stack_shortcut_prefix(),
         auto_paste: true,
         keep_window_open: false,
         always_on_top: false,
@@ -202,7 +262,10 @@ pub async fn ingest_clipboard(
     };
     let mut processed = match Pipeline::default().run(raw) {
         PipelineOutcome::Accepted(item) => item,
-        PipelineOutcome::Dropped { interceptor, reason } => {
+        PipelineOutcome::Dropped {
+            interceptor,
+            reason,
+        } => {
             return Ok(IngestResult {
                 accepted: false,
                 item_id: None,
@@ -345,6 +408,15 @@ pub async fn load_history(
                 storage.unwrap_or_default()
             };
 
+            let mut metadata = if is_private {
+                HashMap::new()
+            } else {
+                parse_metadata(row.try_get("metadata").ok())
+            };
+            if !is_private {
+                enrich_size_metadata(&content_type, &content, &mut metadata);
+            }
+
             HistoryItem {
                 id: row.get("id"),
                 content_type,
@@ -355,11 +427,7 @@ pub async fn load_history(
                 pinned: row.try_get::<i64, _>("is_pinned").unwrap_or(0) != 0,
                 is_private,
                 tags,
-                metadata: if is_private {
-                    HashMap::new()
-                } else {
-                    parse_metadata(row.try_get("metadata").ok())
-                },
+                metadata,
             }
         })
         .collect();
@@ -374,10 +442,7 @@ pub struct TextItemDetail {
 }
 
 #[tauri::command]
-pub async fn get_text_item(
-    state: State<'_, AppState>,
-    id: i64,
-) -> Result<TextItemDetail, String> {
+pub async fn get_text_item(state: State<'_, AppState>, id: i64) -> Result<TextItemDetail, String> {
     let row = sqlx::query(
         "SELECT id, preview_text, is_private
          FROM clipboard_items
@@ -406,10 +471,11 @@ pub async fn get_privacy_status(
     state: State<'_, AppState>,
 ) -> Result<PrivacyStatus, String> {
     let cfg = load_privacy_config(&app)?;
-    let private_items: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM clipboard_items WHERE is_private = 1")
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
+    let private_items: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM clipboard_items WHERE is_private = 1")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(0);
 
     Ok(PrivacyStatus {
         password_set: has_password(&cfg),
@@ -715,11 +781,7 @@ pub async fn set_tags(
 }
 
 #[tauri::command]
-pub async fn mark_used(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: i64,
-) -> Result<(), String> {
+pub async fn mark_used(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), String> {
     sqlx::query(
         "UPDATE clipboard_items
          SET use_count = use_count + 1,
@@ -747,6 +809,11 @@ pub async fn update_text_item(
     }
 
     let hash = compute_hash("text", &normalized);
+    let metadata = serde_json::to_string(&HashMap::from([(
+        "length".to_string(),
+        vec![normalized.len().to_string()],
+    )]))
+    .unwrap_or_else(|_| "{}".into());
     let affected = sqlx::query(
         "UPDATE clipboard_items
          SET content_type = 'text',
@@ -755,11 +822,13 @@ pub async fn update_text_item(
              storage_path = NULL,
              encrypted_content = NULL,
              is_private = 0,
+             metadata = ?3,
              last_used_at = CURRENT_TIMESTAMP
-         WHERE id = ?3 AND (is_private IS NULL OR is_private = 0)",
+         WHERE id = ?4 AND (is_private IS NULL OR is_private = 0)",
     )
     .bind(&hash)
     .bind(&normalized)
+    .bind(&metadata)
     .bind(id)
     .execute(&state.pool)
     .await
@@ -772,6 +841,47 @@ pub async fn update_text_item(
 
     emit_changed(&app).await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn create_stack_text_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    content: String,
+) -> Result<i64, String> {
+    let normalized = content.trim().to_string();
+    if normalized.is_empty() {
+        return Err("content cannot be empty".to_string());
+    }
+
+    let hash = compute_hash(
+        "text",
+        &format!(
+            "stack:{}:{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            normalized
+        ),
+    );
+    let metadata = serde_json::to_string(&HashMap::from([(
+        "length".to_string(),
+        vec![normalized.len().to_string()],
+    )]))
+    .unwrap_or_else(|_| "{}".into());
+    let id = sqlx::query(
+        "INSERT INTO clipboard_items
+            (content_type, content_hash, preview_text, storage_path, tags, metadata, use_count, last_used_at)
+         VALUES ('text', ?1, ?2, NULL, '[]', ?3, 1, CURRENT_TIMESTAMP)",
+    )
+    .bind(&hash)
+    .bind(&normalized)
+    .bind(&metadata)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .last_insert_rowid();
+
+    emit_changed(&app).await;
+    Ok(id)
 }
 
 #[derive(Debug, Serialize)]
@@ -820,27 +930,105 @@ pub async fn get_active_window() -> Result<String, String> {
 }
 
 #[tauri::command]
+pub async fn is_paste_shortcut_down() -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_V,
+        };
+
+        let is_down =
+            |key: VIRTUAL_KEY| unsafe { (GetAsyncKeyState(key.0 as i32) as u16 & 0x8000) != 0 };
+        return Ok(
+            (is_down(VK_CONTROL) || is_down(VK_LCONTROL) || is_down(VK_RCONTROL)) && is_down(VK_V),
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
 pub async fn save_temp_image(app: AppHandle, data_url: String) -> Result<String, String> {
-    let encoded = data_url
+    let (header, encoded) = data_url
         .split_once(',')
-        .map(|(_, value)| value)
+        .map(|(header, value)| (header, value))
         .ok_or_else(|| "invalid data url".to_string())?;
+    let extension = if header.contains("image/jpeg") {
+        "jpg"
+    } else if header.contains("image/gif") {
+        "gif"
+    } else if header.contains("image/bmp") {
+        "bmp"
+    } else if header.contains("image/webp") {
+        "webp"
+    } else {
+        "png"
+    };
 
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .map_err(|e| e.to_string())?;
 
-    let temp_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("temp");
+    let temp_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("temp");
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
     let filename = format!(
-        "clipboard-{}.png",
-        chrono::Utc::now().timestamp_millis()
+        "clipboard-{}.{}",
+        chrono::Utc::now().timestamp_millis(),
+        extension
     );
     let image_path = temp_dir.join(filename);
-    std::fs::write(&image_path, bytes).map_err(|e| e.to_string())?;
+    let partial_path = image_path.with_extension(format!("{}.part", extension));
+    std::fs::write(&partial_path, bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&partial_path, &image_path).map_err(|e| e.to_string())?;
 
     Ok(image_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn read_image_as_data_url(path: String) -> Result<String, String> {
+    let image_path = std::path::PathBuf::from(path);
+    let mut last_error = String::new();
+    let mut bytes = Vec::new();
+    for attempt in 0..6 {
+        match std::fs::read(&image_path) {
+            Ok(value) if !value.is_empty() => {
+                bytes = value;
+                break;
+            }
+            Ok(_) => {
+                last_error = "image file is empty".to_string();
+            }
+            Err(err) => {
+                last_error = err.to_string();
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(35 * (attempt + 1)));
+    }
+    if bytes.is_empty() {
+        return Err(last_error);
+    }
+    let mime = match image_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("bmp") => "image/bmp",
+        Some("webp") => "image/webp",
+        _ => "image/png",
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{};base64,{}", mime, encoded))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -848,6 +1036,14 @@ pub async fn save_temp_image(app: AppHandle, data_url: String) -> Result<String,
 pub struct AppConfig {
     pub cache_path: String,
     pub shortcut: String,
+    #[serde(default = "default_plain_paste_shortcut")]
+    pub plain_paste_shortcut: String,
+    #[serde(default = "default_queue_step_shortcut")]
+    pub queue_step_shortcut: String,
+    #[serde(default = "default_quick_paste_prefix")]
+    pub quick_paste_prefix: String,
+    #[serde(default = "default_stack_shortcut_prefix")]
+    pub stack_shortcut_prefix: String,
     #[serde(default = "default_auto_paste")]
     pub auto_paste: bool,
     #[serde(default = "default_keep_window_open")]
@@ -883,6 +1079,18 @@ pub struct AppConfig {
 fn default_auto_paste() -> bool {
     true
 }
+fn default_plain_paste_shortcut() -> String {
+    "Super+Alt+V".to_string()
+}
+fn default_queue_step_shortcut() -> String {
+    "CommandOrControl+Alt+V".to_string()
+}
+fn default_quick_paste_prefix() -> String {
+    "Super+Shift".to_string()
+}
+fn default_stack_shortcut_prefix() -> String {
+    "CommandOrControl+Alt".to_string()
+}
 fn default_keep_window_open() -> bool {
     false
 }
@@ -904,6 +1112,10 @@ fn default_device_name() -> String {
 pub struct ConfigResponse {
     pub cache_path: String,
     pub shortcut: String,
+    pub plain_paste_shortcut: String,
+    pub queue_step_shortcut: String,
+    pub quick_paste_prefix: String,
+    pub stack_shortcut_prefix: String,
     pub default_dir: String,
     pub effective_dir: String,
     pub auto_paste: bool,
@@ -928,6 +1140,10 @@ pub struct ConfigResponse {
 pub struct PartialAppConfig {
     pub cache_path: Option<String>,
     pub shortcut: Option<String>,
+    pub plain_paste_shortcut: Option<String>,
+    pub queue_step_shortcut: Option<String>,
+    pub quick_paste_prefix: Option<String>,
+    pub stack_shortcut_prefix: Option<String>,
     pub auto_paste: Option<bool>,
     pub keep_window_open: Option<bool>,
     pub always_on_top: Option<bool>,
@@ -960,6 +1176,10 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
     Ok(ConfigResponse {
         cache_path: conf.cache_path,
         shortcut: conf.shortcut,
+        plain_paste_shortcut: conf.plain_paste_shortcut,
+        queue_step_shortcut: conf.queue_step_shortcut,
+        quick_paste_prefix: conf.quick_paste_prefix,
+        stack_shortcut_prefix: conf.stack_shortcut_prefix,
         default_dir,
         effective_dir,
         auto_paste: conf.auto_paste,
@@ -990,6 +1210,18 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
     }
     if let Some(value) = config.shortcut {
         merged.shortcut = value;
+    }
+    if let Some(value) = config.plain_paste_shortcut {
+        merged.plain_paste_shortcut = value;
+    }
+    if let Some(value) = config.queue_step_shortcut {
+        merged.queue_step_shortcut = value;
+    }
+    if let Some(value) = config.quick_paste_prefix {
+        merged.quick_paste_prefix = value;
+    }
+    if let Some(value) = config.stack_shortcut_prefix {
+        merged.stack_shortcut_prefix = value;
     }
     if let Some(value) = config.auto_paste {
         merged.auto_paste = value;
@@ -1022,12 +1254,8 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
         merged.device_name = value;
     }
     if let Some(value) = config.managed_tags {
-        merged.managed_tags = normalize_managed_tags(
-            value
-                .into_iter()
-                .map(ManagedTagConfigInput::Full)
-                .collect(),
-        );
+        merged.managed_tags =
+            normalize_managed_tags(value.into_iter().map(ManagedTagConfigInput::Full).collect());
     }
     if let Some(value) = config.window_width {
         merged.window_width = Some(value);

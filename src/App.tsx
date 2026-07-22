@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { writeImage, writeText } from "tauri-plugin-clipboard-next-api";
+import { writeFiles, writeImage, writeText } from "tauri-plugin-clipboard-x-api";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   CheckSquare,
@@ -10,7 +11,9 @@ import {
   FileImage,
   FileText,
   Files,
+  GripHorizontal,
   Link2,
+  Pin,
   Tags,
   Search,
   Settings2,
@@ -26,8 +29,7 @@ import { PasswordPromptModal } from "./components/PasswordPromptModal";
 import { QuickTextEditorPage } from "./components/QuickTextEditorPage";
 import { SettingsModal } from "./components/SettingsModal";
 import { TagManagementPage } from "./components/TagManagementPage";
-import { useClipboardWatcher, setInjectedOverrideSig } from "./hooks/useClipboardWatcher";
-import { useGlobalShortcut } from "./hooks/useGlobalShortcut";
+import { resetClipboardStack, useClipboardWatcher, setInjectedOverrideSig } from "./hooks/useClipboardWatcher";
 import { useHistory } from "./hooks/useHistory";
 import { api } from "./lib/api";
 import {
@@ -40,7 +42,10 @@ import {
 } from "./lib/filter";
 import type { HistoryItem, ManagedTag } from "./types";
 
-const DEFAULT_SHORTCUT = "CommandOrControl+Shift+E";
+const DEFAULT_SHORTCUT = "CommandOrControl+Shift+V";
+const DEFAULT_QUEUE_STEP_SHORTCUT = "CommandOrControl+Alt+V";
+const DEFAULT_QUICK_PASTE_PREFIX = "Super+Shift";
+const DEFAULT_STACK_SHORTCUT_PREFIX = "CommandOrControl+Alt";
 const DEFAULT_TAG_COLOR = "#0f6cbd";
 const SYSTEM_TAGS: Array<ManagedTag & { key: ActiveView }> = [
   { id: "sys-text", name: "Text", common: true, color: "#0078d4", system: true, key: "text" },
@@ -98,8 +103,17 @@ function sanitizeManagedTags(tags: ManagedTag[]) {
   return Array.from(normalized.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function normalizeShortcutValue(value: string | null | undefined, fallback: string) {
+  const trimmed = value?.trim() ?? "";
+  return trimmed || fallback;
+}
+
 function MainApp() {
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const suppressBlurHideUntilRef = useRef(0);
+  const blurHideTimerRef = useRef<number | null>(null);
+  const edgeInteractingRef = useRef(false);
+  const pendingSelectionRef = useRef<{ page: number; row: number; edge: "start" | "end" } | null>(null);
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [scope, setScope] = useState<Scope>("all");
@@ -112,7 +126,6 @@ function MainApp() {
   const [activeTags, setActiveTags] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
-  const [shortcut, setShortcut] = useState(DEFAULT_SHORTCUT);
   const [autoPaste, setAutoPaste] = useState(true);
   const [keepWindowOpen, setKeepWindowOpen] = useState(false);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
@@ -124,7 +137,9 @@ function MainApp() {
   const [tagSelectorStyle, setTagSelectorStyle] = useState<CSSProperties>({});
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [queuedIds, setQueuedIds] = useState<number[]>([]);
   const [cardRows, setCardRows] = useState(1);
+  const [windowLayoutTick, setWindowLayoutTick] = useState(0);
   const [privacyAction, setPrivacyAction] = useState<{ id: number } | null>(null);
   const [privacyBusy, setPrivacyBusy] = useState(false);
   const [privacyError, setPrivacyError] = useState<string | null>(null);
@@ -135,7 +150,34 @@ function MainApp() {
       .getConfig()
       .then((cfg) => {
         if (!cfg) return;
-        if (cfg.shortcut) setShortcut(cfg.shortcut);
+        const nextShortcutRaw = normalizeShortcutValue(cfg.shortcut, DEFAULT_SHORTCUT);
+        const nextShortcut =
+          nextShortcutRaw === "Super+Shift+V" ? DEFAULT_SHORTCUT : nextShortcutRaw;
+        const nextQueueStepShortcut = normalizeShortcutValue(
+          cfg.queueStepShortcut,
+          DEFAULT_QUEUE_STEP_SHORTCUT,
+        );
+        const nextQuickPastePrefix = normalizeShortcutValue(
+          cfg.quickPastePrefix,
+          DEFAULT_QUICK_PASTE_PREFIX,
+        );
+        const nextStackShortcutPrefix = normalizeShortcutValue(
+          cfg.stackShortcutPrefix,
+          DEFAULT_STACK_SHORTCUT_PREFIX,
+        );
+        if (
+          nextShortcut !== (cfg.shortcut ?? "") ||
+          nextQueueStepShortcut !== (cfg.queueStepShortcut ?? "") ||
+          nextQuickPastePrefix !== (cfg.quickPastePrefix ?? "") ||
+          nextStackShortcutPrefix !== (cfg.stackShortcutPrefix ?? "")
+        ) {
+          void api.setConfig({
+            shortcut: nextShortcut,
+            queueStepShortcut: nextQueueStepShortcut,
+            quickPastePrefix: nextQuickPastePrefix,
+            stackShortcutPrefix: nextStackShortcutPrefix,
+          }).catch(console.error);
+        }
         if (typeof cfg.autoPaste === "boolean") setAutoPaste(cfg.autoPaste);
         if (typeof cfg.keepWindowOpen === "boolean") setKeepWindowOpen(cfg.keepWindowOpen);
         if (typeof cfg.alwaysOnTop === "boolean") setAlwaysOnTop(cfg.alwaysOnTop);
@@ -164,8 +206,6 @@ function MainApp() {
 
   const { history } = useHistory(historyLimit, setErrorMsg);
   useClipboardWatcher(0, setErrorMsg);
-  useGlobalShortcut(shortcut, setErrorMsg);
-
   const sourceHistory = history;
   const filterState = { search, scope, activeTags, ...advancedFilters };
   const filtered = useMemo(
@@ -323,7 +363,7 @@ function MainApp() {
     const observer = new ResizeObserver(updateRows);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [activeView]);
+  }, [activeView, windowLayoutTick]);
 
   useEffect(() => {
     if (page >= totalPages) setPage(Math.max(0, totalPages - 1));
@@ -335,10 +375,36 @@ function MainApp() {
       setSelectedId(null);
       return;
     }
+    const pending = pendingSelectionRef.current;
+    if (pending && pending.page === page) {
+      const rows = Math.max(1, cardRows);
+      const total = currentPageItems.length;
+      const totalColumns = Math.ceil(total / rows);
+      const targetColumn = pending.edge === "start" ? 0 : Math.max(0, totalColumns - 1);
+      const columnStart = targetColumn * rows;
+      const columnLength = Math.min(rows, Math.max(0, total - columnStart));
+      const targetIndex = columnStart + Math.max(0, Math.min(pending.row, Math.max(0, columnLength - 1)));
+      const targetItem = currentPageItems[targetIndex] ?? currentPageItems[0];
+      pendingSelectionRef.current = null;
+      setSelectedId(targetItem.id);
+      window.requestAnimationFrame(() => {
+        document.getElementById(`history-item-${targetItem.id}`)?.scrollIntoView({
+          block: "nearest",
+          inline: "nearest",
+          behavior: "auto",
+        });
+      });
+      return;
+    }
     if (!currentPageItems.some((item) => item.id === selectedId)) {
       setSelectedId(currentPageItems[0].id);
     }
-  }, [activeView, currentPageItems, selectedId]);
+  }, [activeView, currentPageItems, selectedId, page, cardRows]);
+
+  useEffect(() => {
+    const ids = new Set(sourceHistory.map((item) => item.id));
+    setQueuedIds((prev) => prev.filter((id) => ids.has(id)));
+  }, [sourceHistory]);
 
   const handleScrollTabs = (direction: "left" | "right") => {
     const node = document.getElementById("filter-scroll");
@@ -346,12 +412,84 @@ function MainApp() {
     node.scrollBy({ left: direction === "left" ? -140 : 140, behavior: "smooth" });
   };
 
-  const handlePageChange = (nextPage: number) => {
+  const handlePageChange = (nextPage: number, pendingSelection?: { row: number; edge: "start" | "end" }) => {
     const clamped = Math.max(0, Math.min(totalPages - 1, nextPage));
+    pendingSelectionRef.current = pendingSelection ? { page: clamped, ...pendingSelection } : null;
     setPage(clamped);
     setSelectedId(null);
     const strip = document.getElementById("card-scroll");
     if (strip) strip.scrollLeft = 0;
+  };
+
+  const markTransientWindowInteraction = (durationMs = 2400) => {
+    suppressBlurHideUntilRef.current = Date.now() + durationMs;
+  };
+
+  const navigateGridSelection = (direction: "left" | "right" | "up" | "down") => {
+    if (currentPageItems.length === 0) return;
+
+    const currentIndex = currentPageItems.findIndex((item) => item.id === selectedId);
+    const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+    const rows = Math.max(1, cardRows);
+    const total = currentPageItems.length;
+    const currentColumn = Math.floor(safeIndex / rows);
+    const currentRow = safeIndex % rows;
+    const totalColumns = Math.ceil(total / rows);
+
+    const getColumnLength = (column: number) => {
+      if (column < 0 || column >= totalColumns) return 0;
+      return Math.min(rows, Math.max(0, total - column * rows));
+    };
+
+    const getIndex = (column: number, row: number) => {
+      const columnLength = getColumnLength(column);
+      if (columnLength <= 0) return safeIndex;
+      const nextRow = Math.max(0, Math.min(row, columnLength - 1));
+      return column * rows + nextRow;
+    };
+
+    let nextIndex = safeIndex;
+    if (direction === "up") {
+      nextIndex = getIndex(currentColumn, currentRow - 1);
+    } else if (direction === "down") {
+      nextIndex = getIndex(currentColumn, currentRow + 1);
+    } else if (direction === "left") {
+      if (currentColumn === 0 && page > 0) {
+        handlePageChange(page - 1, { row: currentRow, edge: "end" });
+        return;
+      }
+      nextIndex = getIndex(currentColumn - 1, currentRow);
+    } else if (direction === "right") {
+      if (currentColumn >= totalColumns - 1 && page < totalPages - 1) {
+        handlePageChange(page + 1, { row: currentRow, edge: "start" });
+        return;
+      }
+      nextIndex = getIndex(currentColumn + 1, currentRow);
+    }
+
+    if (direction === "left" && nextIndex === safeIndex && safeIndex === 0 && page > 0) {
+      handlePageChange(page - 1, { row: currentRow, edge: "end" });
+      return;
+    }
+
+    if (
+      direction === "right" &&
+      nextIndex === safeIndex &&
+      safeIndex === currentPageItems.length - 1 &&
+      page < totalPages - 1
+    ) {
+      handlePageChange(page + 1, { row: currentRow, edge: "start" });
+      return;
+    }
+
+    const next = currentPageItems[Math.max(0, Math.min(total - 1, nextIndex))];
+    if (!next) return;
+    setSelectedId(next.id);
+    document.getElementById(`history-item-${next.id}`)?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+      behavior: "auto",
+    });
   };
 
   const toggleTag = (tag: string) => {
@@ -379,6 +517,12 @@ function MainApp() {
     setActiveView("all");
   };
 
+  const getPlainTextFromItem = (item: HistoryItem | { content: string; contentType: "text" }) => {
+    if (item.contentType === "text") return item.content;
+    if (item.contentType === "file") return item.content;
+    return null;
+  };
+
   const saveManagedTags = async (nextTags: ManagedTag[]) => {
     const normalized = sanitizeManagedTags(nextTags);
     await api.setConfig({ managedTags: normalized });
@@ -387,9 +531,20 @@ function MainApp() {
 
   const writeItemToClipboard = async (
     item: HistoryItem | { id: number; content: string; contentType: "text" },
+    options?: { plainText?: boolean },
   ) => {
     if ("isPrivate" in item && item.isPrivate) {
       throw new Error("This item is private. Unlock it before copying.");
+    }
+
+    if (options?.plainText) {
+      const plainText = getPlainTextFromItem(item);
+      if (plainText === null) {
+        throw new Error("Plain-text paste is only supported for text and file items.");
+      }
+      await writeText(plainText);
+      setInjectedOverrideSig(plainText);
+      return;
     }
 
     if (item.contentType === "text") {
@@ -399,8 +554,42 @@ function MainApp() {
     }
 
     if (item.contentType === "image") {
-      const size = await writeImageDataUrl(item.content);
-      if (size) setInjectedOverrideSig(`img_${size.width}x${size.height}`);
+      await writeImageDataUrl(item.content);
+      const width = "metadata" in item ? item.metadata.width?.[0] : null;
+      const height = "metadata" in item ? item.metadata.height?.[0] : null;
+      setInjectedOverrideSig(width && height ? `img_${width}x${height}` : item.content);
+      return;
+    }
+
+    if (item.contentType === "file") {
+      const files = item.content.split("\n").map((path) => path.trim()).filter(Boolean);
+      if (files.length === 0) throw new Error("No files to copy.");
+      await writeFiles(files);
+      setInjectedOverrideSig(`files_${files.join("|")}`);
+      return;
+    }
+  };
+
+  const applyWindowHideForPaste = async () => {
+    await getCurrentWindow().hide().catch(() => {});
+    window.setTimeout(async () => {
+      try {
+        await api.simulatePaste();
+      } catch (err) {
+        setErrorMsg("Paste simulation error: " + String(err));
+      }
+    }, 90);
+  };
+
+  const pasteHistoryItem = async (item: HistoryItem, options?: { plainText?: boolean; hideWindow?: boolean }) => {
+    await resetClipboardStack();
+    await writeItemToClipboard(item, options);
+    setCopiedId(item.id);
+    window.setTimeout(() => setCopiedId(null), 1600);
+    setSelectedId(item.id);
+    void api.markUsed(item.id).catch(console.error);
+    if (options?.hideWindow !== false) {
+      await applyWindowHideForPaste();
     }
   };
 
@@ -408,6 +597,10 @@ function MainApp() {
     item: HistoryItem | { id: number; content: string; contentType: "text" },
   ) => {
     try {
+      const willAutoPaste = autoPaste && !keepWindowOpen && !alwaysOnTop;
+      if (willAutoPaste) {
+        await resetClipboardStack();
+      }
       await writeItemToClipboard(item);
 
       setCopiedId(item.id);
@@ -439,23 +632,7 @@ function MainApp() {
 
   const handlePaste = async (item: HistoryItem) => {
     try {
-      await writeItemToClipboard(item);
-      setCopiedId(item.id);
-      window.setTimeout(() => setCopiedId(null), 1600);
-      setSelectedId(item.id);
-      void api.markUsed(item.id).catch(console.error);
-
-      if (!alwaysOnTop) {
-        await getCurrentWindow().hide().catch(() => {});
-      }
-
-      window.setTimeout(async () => {
-        try {
-          await api.simulatePaste();
-        } catch (err) {
-          setErrorMsg("Paste simulation error: " + String(err));
-        }
-      }, 90);
+      await pasteHistoryItem(item, { hideWindow: !alwaysOnTop });
     } catch (err) {
       setErrorMsg("Paste error: " + String(err));
     }
@@ -466,6 +643,19 @@ function MainApp() {
   ) => {
     if ("id" in item && item.id > 0) setSelectedId(item.id);
     void handleCopy(item);
+  };
+
+  const toggleQueuedItem = (id: number) => {
+    setQueuedIds((prev) => {
+      const index = prev.indexOf(id);
+      if (index >= 0) return prev.filter((value) => value !== id);
+      return [...prev, id];
+    });
+  };
+
+  const queueOrderFor = (id: number) => {
+    const index = queuedIds.indexOf(id);
+    return index >= 0 ? index + 1 : null;
   };
 
   const handleTogglePin = async (id: number) => {
@@ -499,6 +689,9 @@ function MainApp() {
 
   const handleSettingsSaved = (settings: {
     shortcut: string;
+    queueStepShortcut: string;
+    quickPastePrefix: string;
+    stackShortcutPrefix: string;
     autoPaste: boolean;
     keepWindowOpen: boolean;
     alwaysOnTop: boolean;
@@ -509,7 +702,6 @@ function MainApp() {
     webdavSyncEnabled: boolean;
     deviceName: string;
   }) => {
-    setShortcut(settings.shortcut || DEFAULT_SHORTCUT);
     setAutoPaste(settings.autoPaste);
     setKeepWindowOpen(settings.keepWindowOpen);
     setAlwaysOnTop(settings.alwaysOnTop);
@@ -660,6 +852,91 @@ function MainApp() {
   };
 
   useEffect(() => {
+    void api.syncQueueState(queuedIds).catch((err) => {
+      console.error("Sync queue state failed:", err);
+    });
+  }, [queuedIds]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<{ ids: number[] }>("easycp://queue-updated", ({ payload }) => {
+      if (!payload || !Array.isArray(payload.ids)) return;
+      setQueuedIds(payload.ids);
+    }).then((fn) => {
+      unlisten = fn;
+    }).catch((err) => {
+      console.error("Queue update listener failed:", err);
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const appWindow = getCurrentWindow();
+    let unlisten: (() => void) | undefined;
+    let unlistenResize: (() => void) | undefined;
+    let unlistenMove: (() => void) | undefined;
+    const clearBlurTimer = () => {
+      if (blurHideTimerRef.current !== null) {
+        window.clearTimeout(blurHideTimerRef.current);
+        blurHideTimerRef.current = null;
+      }
+    };
+    const scheduleBlurHide = () => {
+      clearBlurTimer();
+      blurHideTimerRef.current = window.setTimeout(() => {
+        if (edgeInteractingRef.current || Date.now() < suppressBlurHideUntilRef.current) {
+          return;
+        }
+        void appWindow.hide().catch(() => {});
+      }, 160);
+    };
+    void appWindow.onFocusChanged(({ payload }) => {
+      if (!payload) {
+        if (edgeInteractingRef.current || Date.now() < suppressBlurHideUntilRef.current) {
+          console.info("[EasyCPTrans] Ignore blur-hide during transient window interaction.");
+          return;
+        }
+        scheduleBlurHide();
+      } else {
+        clearBlurTimer();
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    void appWindow.onResized(() => {
+      markTransientWindowInteraction(6500);
+      setWindowLayoutTick((value) => value + 1);
+    }).then((fn) => {
+      unlistenResize = fn;
+    });
+    void appWindow.onMoved(() => {
+      markTransientWindowInteraction(2200);
+    }).then((fn) => {
+      unlistenMove = fn;
+    });
+    const handlePointerDown = () => {
+      edgeInteractingRef.current = true;
+      markTransientWindowInteraction(1800);
+    };
+    const handleMouseUp = () => {
+      edgeInteractingRef.current = false;
+      markTransientWindowInteraction(1200);
+    };
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      clearBlurTimer();
+      unlisten?.();
+      unlistenResize?.();
+      unlistenMove?.();
+      window.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, []);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -685,19 +962,22 @@ function MainApp() {
         if (tag === "input" || tag === "textarea" || target.isContentEditable) return;
       }
 
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (
+        event.key === "ArrowDown" ||
+        event.key === "ArrowUp" ||
+        event.key === "ArrowLeft" ||
+        event.key === "ArrowRight"
+      ) {
         event.preventDefault();
-        if (currentPageItems.length === 0) return;
-        const currentIndex = currentPageItems.findIndex((item) => item.id === selectedId);
-        const baseIndex = currentIndex >= 0 ? currentIndex : 0;
-        const delta = event.key === "ArrowDown" ? 1 : -1;
-        const nextIndex = Math.min(currentPageItems.length - 1, Math.max(0, baseIndex + delta));
-        const next = currentPageItems[nextIndex];
-        setSelectedId(next.id);
-        document.getElementById(`history-item-${next.id}`)?.scrollIntoView({
-          block: "nearest",
-          behavior: "auto",
-        });
+        navigateGridSelection(
+          event.key === "ArrowDown"
+            ? "down"
+            : event.key === "ArrowUp"
+              ? "up"
+              : event.key === "ArrowLeft"
+                ? "left"
+                : "right",
+        );
         return;
       }
 
@@ -708,12 +988,26 @@ function MainApp() {
           currentPageItems.find((item) => item.id === selectedId) ?? currentPageItems[0];
         setSelectedId(selected.id);
         handleCopyFromUI(selected);
+        return;
+      }
+
+      if (event.key === " " || event.key === "Tab") {
+        event.preventDefault();
+        const selected =
+          currentPageItems.find((item) => item.id === selectedId) ?? currentPageItems[0];
+        if (!selected) return;
+        toggleQueuedItem(selected.id);
+        if (event.key === "Tab") {
+          const currentIndex = currentPageItems.findIndex((item) => item.id === selected.id);
+          const nextIndex = Math.min(currentPageItems.length - 1, Math.max(0, currentIndex + 1));
+          setSelectedId(currentPageItems[nextIndex].id);
+        }
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeView, currentPageItems, privacyAction, searchOpen, selectedId]);
+  }, [activeView, currentPageItems, privacyAction, searchOpen, selectedId, queuedIds, sourceHistory, cardRows, page, totalPages]);
 
   const onTabClick = (key: ActiveView, event?: React.MouseEvent<HTMLButtonElement>) => {
     if (key === "tag-selector") {
@@ -761,6 +1055,8 @@ function MainApp() {
         className="easycp-drag-edge easycp-drag-edge-top"
         data-tauri-drag-region
         onMouseDown={() => {
+          edgeInteractingRef.current = true;
+          markTransientWindowInteraction(5000);
           void getCurrentWindow().startDragging().catch(() => {});
         }}
       />
@@ -768,6 +1064,8 @@ function MainApp() {
         className="easycp-drag-edge easycp-drag-edge-left"
         data-tauri-drag-region
         onMouseDown={() => {
+          edgeInteractingRef.current = true;
+          markTransientWindowInteraction(5000);
           void getCurrentWindow().startDragging().catch(() => {});
         }}
       />
@@ -775,15 +1073,42 @@ function MainApp() {
         className="easycp-drag-edge easycp-drag-edge-right"
         data-tauri-drag-region
         onMouseDown={() => {
+          edgeInteractingRef.current = true;
+          markTransientWindowInteraction(5000);
           void getCurrentWindow().startDragging().catch(() => {});
         }}
       />
 
       <section className="easycp-toolbar">
+          <button
+            className="easycp-icon-btn easycp-drag-handle-btn"
+            title="Drag window"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              edgeInteractingRef.current = true;
+              markTransientWindowInteraction(5000);
+              void getCurrentWindow().startDragging().catch(() => {});
+            }}
+          >
+            <GripHorizontal className="h-4 w-4" />
+          </button>
+
+          <button
+            className={`easycp-icon-btn ${alwaysOnTop ? "active" : ""}`}
+            title={alwaysOnTop ? "Unpin window" : "Pin window on top"}
+            onClick={() => {
+              const next = !alwaysOnTop;
+              setAlwaysOnTop(next);
+              void api.setConfig({ alwaysOnTop: next }).catch(console.error);
+            }}
+          >
+            <Pin className="h-4 w-4" />
+          </button>
+
           <div className="easycp-search-wrap">
             <button
               className="easycp-search-btn"
-              title="Search"
+              title="Search (supports tag/app/type/date/size syntax)"
               onClick={() => {
                 const next = !searchOpen;
                 setSearchOpen(next);
@@ -797,7 +1122,7 @@ function MainApp() {
                 autoFocus={searchOpen}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search clipboard history..."
+                placeholder='Search... tag:work app:chrome type:text "exact phrase"'
               />
             </div>
           </div>
@@ -879,24 +1204,6 @@ function MainApp() {
 
       <ErrorBanner message={errorMsg} />
 
-      {activeView !== "settings" && activeView !== "tag-manager" && hasFilters && (
-        <div className="easycp-activebar">
-          <div className="easycp-activebar-left">
-            <span>
-              {filtered.length} / {sourceHistory.length}
-            </span>
-            {activeTags.map((tag) => (
-              <button key={tag} className="easycp-tagchip" onClick={() => toggleTag(tag)}>
-                #{tag}
-              </button>
-            ))}
-          </div>
-          <button className="easycp-clear-btn" onClick={clearFilters}>
-            Clear filters
-          </button>
-        </div>
-      )}
-
       <main
         className={`easycp-main ${
           activeView === "settings" || activeView === "tag-manager"
@@ -945,6 +1252,12 @@ function MainApp() {
                   availableTags={selectableTags.map((tag) => tag.name)}
                   isSelected={selectedId === item.id}
                   isCopied={copiedId === item.id}
+                  quickSlot={
+                    page === 0 && currentPageItems.indexOf(item) < 10
+                      ? currentPageItems.indexOf(item) + 1
+                      : null
+                  }
+                  queueSlot={queueOrderFor(item.id)}
                   onCopy={handleCopyFromUI}
                   onPaste={handlePaste}
                   onTogglePin={handleTogglePin}
@@ -987,23 +1300,9 @@ function MainApp() {
   );
 }
 
-async function writeImageDataUrl(dataUrl: string): Promise<{ width: number; height: number } | null> {
-  const htmlImg = new window.Image();
-  htmlImg.src = dataUrl;
-  await new Promise((resolve, reject) => {
-    htmlImg.onload = resolve;
-    htmlImg.onerror = reject;
-  });
-  const canvas = document.createElement("canvas");
-  canvas.width = htmlImg.width;
-  canvas.height = htmlImg.height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  ctx.drawImage(htmlImg, 0, 0);
-  const pngDataUrl = canvas.toDataURL("image/png");
-  const imagePath = await api.saveTempImage(pngDataUrl);
+async function writeImageDataUrl(dataUrl: string): Promise<void> {
+  const imagePath = await api.saveTempImage(dataUrl);
   await writeImage(imagePath);
-  return { width: htmlImg.width, height: htmlImg.height };
 }
 
 function parseQuickEditRoute(hash: string): { matched: boolean; itemId: number | null } {

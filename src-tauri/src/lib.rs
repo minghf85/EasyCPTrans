@@ -4,20 +4,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
-    WebviewWindowBuilder,
-    WindowEvent,
+    Manager, PhysicalPosition, WebviewWindowBuilder, WindowEvent,
 };
 
 mod commands;
 mod db;
 mod pipeline;
 mod privacy;
+mod shortcuts;
 mod sync;
 
 static APP_EXITING: AtomicBool = AtomicBool::new(false);
 
-fn simulate_paste_impl() {
+pub(crate) fn simulate_paste_impl() {
     let mut enigo = Enigo::new();
 
     #[cfg(target_os = "macos")]
@@ -38,6 +37,78 @@ fn simulate_paste_impl() {
 #[tauri::command]
 fn simulate_paste() {
     simulate_paste_impl();
+}
+
+#[cfg(target_os = "windows")]
+fn cursor_position_physical() -> Option<(i32, i32)> {
+    use windows::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetCursorPos};
+
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) }.is_ok() {
+        Some((point.x, point.y))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn cursor_position_physical() -> Option<(i32, i32)> {
+    None
+}
+
+pub(crate) fn show_main_window_near_cursor<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window not found".to_string())?;
+
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let (mut next_x, mut next_y) = cursor_position_physical()
+        .map(|(x, y)| (x + 16, y + 18))
+        .unwrap_or((0, 0));
+
+    if let Ok(monitors) = app.available_monitors() {
+        for monitor in monitors {
+            let position = monitor.position();
+            let monitor_size = monitor.size();
+            let left = position.x;
+            let top = position.y;
+            let right = left + monitor_size.width as i32;
+            let bottom = top + monitor_size.height as i32;
+
+            if next_x >= left && next_x <= right && next_y >= top && next_y <= bottom {
+                next_x = next_x.clamp(left + 8, right - size.width as i32 - 8);
+                next_y = next_y.clamp(top + 8, bottom - size.height as i32 - 8);
+                break;
+            }
+        }
+    }
+
+    window
+        .set_position(PhysicalPosition::new(next_x, next_y))
+        .map_err(|e| e.to_string())?;
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(crate) fn toggle_main_window_from_shortcut<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window not found".to_string())?;
+
+    let visible = window.is_visible().map_err(|e| e.to_string())?;
+    let focused = window.is_focused().unwrap_or(false);
+
+    if visible && focused {
+        window.hide().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    show_main_window_near_cursor(app)
 }
 
 fn read_window_state(app: &tauri::AppHandle) -> Option<(f64, f64, f64, f64)> {
@@ -197,12 +268,27 @@ pub fn run() {
             println!("APP DATA DIR: {:?}", app_data);
 
             let old_app_data = app_data.parent().unwrap().join("com.easycut.app");
-            if old_app_data.exists() && old_app_data.join("clipboard.db").exists() && !app_data.join("clipboard.db").exists() {
+            if old_app_data.exists()
+                && old_app_data.join("clipboard.db").exists()
+                && !app_data.join("clipboard.db").exists()
+            {
                 println!("Migrating data from {:?}", old_app_data);
-                let _ = std::fs::copy(old_app_data.join("clipboard.db"), app_data.join("clipboard.db"));
-                let _ = std::fs::copy(old_app_data.join("clipboard.db-shm"), app_data.join("clipboard.db-shm"));
-                let _ = std::fs::copy(old_app_data.join("clipboard.db-wal"), app_data.join("clipboard.db-wal"));
-                let _ = std::fs::copy(old_app_data.join("config.json"), app_data.join("config.json"));
+                let _ = std::fs::copy(
+                    old_app_data.join("clipboard.db"),
+                    app_data.join("clipboard.db"),
+                );
+                let _ = std::fs::copy(
+                    old_app_data.join("clipboard.db-shm"),
+                    app_data.join("clipboard.db-shm"),
+                );
+                let _ = std::fs::copy(
+                    old_app_data.join("clipboard.db-wal"),
+                    app_data.join("clipboard.db-wal"),
+                );
+                let _ = std::fs::copy(
+                    old_app_data.join("config.json"),
+                    app_data.join("config.json"),
+                );
             }
 
             let conf_path = app_data.join("config.json");
@@ -223,8 +309,14 @@ pub fn run() {
                 if !cp.join("clipboard.db").exists() && app_data.join("clipboard.db").exists() {
                     println!("Migrating database to custom cache path: {:?}", cp);
                     let _ = std::fs::copy(app_data.join("clipboard.db"), cp.join("clipboard.db"));
-                    let _ = std::fs::copy(app_data.join("clipboard.db-shm"), cp.join("clipboard.db-shm"));
-                    let _ = std::fs::copy(app_data.join("clipboard.db-wal"), cp.join("clipboard.db-wal"));
+                    let _ = std::fs::copy(
+                        app_data.join("clipboard.db-shm"),
+                        cp.join("clipboard.db-shm"),
+                    );
+                    let _ = std::fs::copy(
+                        app_data.join("clipboard.db-wal"),
+                        cp.join("clipboard.db-wal"),
+                    );
                 }
                 cp.clone()
             } else {
@@ -248,6 +340,21 @@ pub fn run() {
             });
 
             create_main_window(app)?;
+
+            let shortcut_report = shortcuts::register_shortcuts(
+                app.handle(),
+                &commands::read_app_config(app.handle()),
+            );
+            if !shortcut_report.failed.is_empty() {
+                println!(
+                    "[EasyCPTrans] Some shortcuts were not registered on startup: {:?}",
+                    shortcut_report
+                        .failed
+                        .iter()
+                        .map(|item| format!("{} => {}", item.shortcut, item.reason))
+                        .collect::<Vec<_>>()
+                );
+            }
 
             let show_item = MenuItem::with_id(app, "show", "Show EasyCPTrans", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -297,8 +404,14 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_clipboard_next::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    shortcuts::handle_plugin_shortcut(app, shortcut, event);
+                })
+                .build(),
+        )
+        .plugin(tauri_plugin_clipboard_x::init())
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -314,6 +427,7 @@ pub fn run() {
             commands::ingest_clipboard,
             commands::read_clipboard_files,
             commands::get_active_window,
+            commands::is_paste_shortcut_down,
             commands::load_history,
             commands::get_text_item,
             commands::get_privacy_status,
@@ -325,9 +439,14 @@ pub fn run() {
             commands::set_tags,
             commands::mark_used,
             commands::update_text_item,
+            commands::create_stack_text_item,
             commands::save_temp_image,
+            commands::read_image_as_data_url,
             commands::get_config,
             commands::set_config,
+            shortcuts::refresh_global_shortcuts,
+            shortcuts::probe_shortcut_available,
+            shortcuts::sync_queue_state,
             sync::trigger_sync,
             sync::verify_webdav
         ])

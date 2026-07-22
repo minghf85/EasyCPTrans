@@ -35,7 +35,11 @@ fn parse_config(app: &AppHandle) -> Result<AppConfig, String> {
         Err(_) => {
             return Ok(AppConfig {
                 cache_path: "".to_string(),
-                shortcut: "CommandOrControl+Shift+E".to_string(),
+                shortcut: "CommandOrControl+Shift+V".to_string(),
+                plain_paste_shortcut: "Super+Alt+V".to_string(),
+                queue_step_shortcut: "CommandOrControl+Alt+V".to_string(),
+                quick_paste_prefix: "Super+Shift".to_string(),
+                stack_shortcut_prefix: "CommandOrControl+Alt".to_string(),
                 auto_paste: true,
                 keep_window_open: false,
                 always_on_top: false,
@@ -315,7 +319,8 @@ async fn upload_item(
     password: &str,
     item: &SyncItem,
 ) -> Result<(), String> {
-    let body = serde_json::to_vec(item).map_err(|e| format!("Serialize sync item failed: {}", e))?;
+    let body =
+        serde_json::to_vec(item).map_err(|e| format!("Serialize sync item failed: {}", e))?;
     let res = client
         .put(url)
         .header("Content-Type", "application/json; charset=utf-8")
@@ -438,20 +443,21 @@ pub async fn verify_webdav(
     if url.is_empty() {
         return Err("URL cannot be empty".into());
     }
-    
+
     let client = Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
 
     let base_url = url.trim_end_matches('/');
-    let res = client.request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), base_url)
+    let res = client
+        .request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), base_url)
         .header("Depth", "0")
         .basic_auth(&username, password.as_deref())
         .send()
         .await
         .map_err(|e| format!("Connection failed: {}", e))?;
-        
+
     if res.status().is_success() || res.status() == reqwest::StatusCode::MULTI_STATUS {
         Ok(true)
     } else {

@@ -35,9 +35,9 @@ importers:
       react-dom:
         specifier: ^18.3.1
         version: 18.3.1(react@18.3.1)
-      tauri-plugin-clipboard-next-api:
-        specifier: ^0.2.4
-        version: 0.2.4
+      tauri-plugin-clipboard-x-api:
+        specifier: ^2.0.2
+        version: 2.0.2
     devDependencies:
       '@tauri-apps/cli':
         specifier: ^2
@@ -973,8 +973,8 @@ packages:
     engines: {node: '>=14.0.0'}
     hasBin: true
 
-  tauri-plugin-clipboard-next-api@0.2.4:
-    resolution: {integrity: sha512-zzvXguaD1i5SRM2g0iONijufOOyGTb8oBGUE4TkW2t55v1MhA1gSouUzIJcC/ayw2PascLdQJCGWWhTQ3YuI9g==}
+  tauri-plugin-clipboard-x-api@2.0.2:
+    resolution: {integrity: sha512-gvV69iBHsy2IZXWaEucEr9s0L+5IoE/cTpQPe6SvxkQuipgGT3XzDlw5n9ffx4Intp+xJppGUPmWvFHCIw6Ahw==}
 
   thenify-all@1.6.0:
     resolution: {integrity: sha512-RNxQH/qI8/t3thXJDwcstUO4zeqo64+Uy/+sNVRBx4Xn2OX+OZ9oP+iJnNFqplFra2ZUVeKCSa2oVWi3T4uVmA==}
@@ -1840,7 +1840,7 @@ snapshots:
       - tsx
       - yaml
 
-  tauri-plugin-clipboard-next-api@0.2.4:
+  tauri-plugin-clipboard-x-api@2.0.2:
     dependencies:
       '@tauri-apps/api': 2.11.0
 

@@ -26,6 +26,8 @@ export const api = {
 
   getActiveWindow: () => invoke<string>("get_active_window").catch(() => ""),
 
+  isPasteShortcutDown: () => invoke<boolean>("is_paste_shortcut_down").catch(() => false),
+
   togglePin: (id: number) => invoke<boolean>("toggle_pin", { id }),
 
   deleteItem: (id: number) => invoke<void>("delete_item", { id }),
@@ -37,6 +39,9 @@ export const api = {
 
   updateTextItem: (id: number, content: string) =>
     invoke<void>("update_text_item", { id, content }),
+
+  createStackTextItem: (content: string) =>
+    invoke<number>("create_stack_text_item", { content }),
 
   setPrivacyPassword: (
     newPassword: string,
@@ -62,6 +67,9 @@ export const api = {
   saveTempImage: (dataUrl: string) =>
     invoke<string>("save_temp_image", { dataUrl }),
 
+  readImageAsDataUrl: (path: string) =>
+    invoke<string>("read_image_as_data_url", { path }),
+
   verifyWebdav: (url: string, username: string, password?: string) =>
     invoke<boolean>("verify_webdav", { url, username, password }),
 
@@ -71,6 +79,9 @@ export const api = {
     invoke<{
       cachePath: string;
       shortcut: string;
+      queueStepShortcut?: string;
+      quickPastePrefix?: string;
+      stackShortcutPrefix?: string;
       defaultDir: string;
       effectiveDir: string;
       autoPaste: boolean;
@@ -93,6 +104,9 @@ export const api = {
   setConfig: (config: {
     cachePath?: string;
     shortcut?: string;
+    queueStepShortcut?: string;
+    quickPastePrefix?: string;
+    stackShortcutPrefix?: string;
     autoPaste?: boolean;
     keepWindowOpen?: boolean;
     alwaysOnTop?: boolean;
@@ -109,4 +123,16 @@ export const api = {
     windowX?: number;
     windowY?: number;
   }) => invoke("set_config", { config }),
+
+  refreshGlobalShortcuts: () =>
+    invoke<{
+      registered: string[];
+      failed: Array<{ shortcut: string; action: string; reason: string }>;
+    }>("refresh_global_shortcuts"),
+
+  probeShortcutAvailable: (shortcut: string) =>
+    invoke<boolean>("probe_shortcut_available", { shortcut }),
+
+  syncQueueState: (ids: number[]) =>
+    invoke<void>("sync_queue_state", { ids }),
 };

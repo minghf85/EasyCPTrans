@@ -1,12 +1,14 @@
 import { useEffect, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
-  getFilePath,
+  getDefaultSaveImagePath,
   onClipboardChange,
   readClipboard,
-  startWatch,
+  startListening,
+  writeFiles,
+  writeText,
   type ReadClipboard,
-} from "tauri-plugin-clipboard-next-api";
-import { convertFileSrc } from "@tauri-apps/api/core";
+} from "tauri-plugin-clipboard-x-api";
 import { api } from "../lib/api";
 
 export let injectedOverrideSig: string | null = null;
@@ -15,16 +17,42 @@ export function setInjectedOverrideSig(sig: string | null) {
   injectedOverrideSig = sig;
 }
 
+type StackDirection = "up" | "down";
+type StackState = {
+  direction: StackDirection;
+  contentType: "text" | "file" | null;
+  itemId: number | null;
+  textItems: string[];
+  fileItems: string[];
+};
+
+let resetStackHandler: (() => Promise<void>) | null = null;
+let stackEnabled = false;
+let pastePollTimer: number | null = null;
+
+export function resetClipboardStack() {
+  return resetStackHandler?.() ?? Promise.resolve();
+}
+
+function dataUrlByteLength(dataUrl: string) {
+  const encoded = dataUrl.split(",", 2)[1] ?? "";
+  const normalized = encoded.replace(/\s/g, "");
+  if (!normalized) return 0;
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
+}
+
 async function imagePathToDataUrl(path: string): Promise<string> {
-  const url = convertFileSrc(path);
-  const response = await fetch(url);
-  const blob = await response.blob();
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await api.readImageAsDataUrl(path);
+    } catch (err) {
+      lastError = err;
+      await new Promise((resolve) => window.setTimeout(resolve, 40 * (attempt + 1)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 export function useClipboardWatcher(
@@ -38,6 +66,80 @@ export function useClipboardWatcher(
     let cancelled = false;
     let lastSig = "";
     let unlisten: (() => void) | null = null;
+    let unlistenStackMode: (() => void) | null = null;
+    let unlistenStackReset: (() => void) | null = null;
+    let stackState: StackState | null = null;
+    let pastePollBusy = false;
+
+    const stopPasteShortcutPolling = () => {
+      if (pastePollTimer !== null) {
+        window.clearInterval(pastePollTimer);
+        pastePollTimer = null;
+      }
+    };
+
+    const resetStack = async () => {
+      stackState = null;
+      stackEnabled = false;
+      lastSig = "";
+      injectedOverrideSig = null;
+      stopPasteShortcutPolling();
+    };
+
+    const startPasteShortcutPolling = () => {
+      stopPasteShortcutPolling();
+      pastePollTimer = window.setInterval(() => {
+        if (!stackEnabled || pastePollBusy) return;
+        pastePollBusy = true;
+        void api.isPasteShortcutDown()
+          .then((isDown) => {
+            if (isDown && stackEnabled) {
+              void resetStack();
+            }
+          })
+          .catch(console.error)
+          .finally(() => {
+            pastePollBusy = false;
+          });
+      }, 35);
+    };
+
+    resetStackHandler = resetStack;
+
+    const toggleStackMode = (direction: StackDirection) => {
+      if (stackState?.direction === direction) {
+        void resetStack();
+        return;
+      }
+      stackState = {
+        direction,
+        contentType: null,
+        itemId: null,
+        textItems: [],
+        fileItems: [],
+      };
+      stackEnabled = true;
+      startPasteShortcutPolling();
+    };
+
+    const stackFiles = async (paths: string[]) => {
+      if (!stackState) return false;
+      if (stackState.contentType !== "file") {
+        stackState.contentType = "file";
+        stackState.itemId = null;
+        stackState.fileItems = [];
+        stackState.textItems = [];
+      }
+      stackState.fileItems =
+        stackState.direction === "up"
+          ? [...paths, ...stackState.fileItems]
+          : [...stackState.fileItems, ...paths];
+      const combinedSig = `files_${stackState.fileItems.join("|")}`;
+      injectedOverrideSig = combinedSig;
+      lastSig = combinedSig;
+      await writeFiles(stackState.fileItems);
+      return true;
+    };
 
     const ingestText = async (text: string) => {
       const metadata = { length: [text.length.toString()] };
@@ -46,6 +148,31 @@ export function useClipboardWatcher(
       if (!result.accepted) {
         console.log("dropped:", result.droppedBy, result.reason);
       }
+      return result;
+    };
+
+    const stackText = async (text: string) => {
+      if (!stackState) return false;
+      if (stackState.contentType !== "text") {
+        stackState.contentType = "text";
+        stackState.itemId = null;
+        stackState.textItems = [];
+        stackState.fileItems = [];
+      }
+      stackState.textItems =
+        stackState.direction === "up"
+          ? [text, ...stackState.textItems]
+          : [...stackState.textItems, text];
+      const combined = stackState.textItems.join("\n");
+      injectedOverrideSig = combined;
+      lastSig = combined;
+      await writeText(combined);
+      if (stackState.itemId) {
+        await api.updateTextItem(stackState.itemId, combined);
+      } else {
+        stackState.itemId = await api.createStackTextItem(combined);
+      }
+      return true;
     };
 
     const ingestFile = async (files: { path: string; size: number }[]) => {
@@ -64,11 +191,11 @@ export function useClipboardWatcher(
     };
 
     const ingestImage = async (clipboard: NonNullable<ReadClipboard["image"]>) => {
-      const dataUrl = await imagePathToDataUrl(clipboard.value.path);
+      const dataUrl = await imagePathToDataUrl(clipboard.value);
       const metadata = {
-        width: [clipboard.value.width.toString()],
-        height: [clipboard.value.height.toString()],
-        size: [clipboard.value.size.toString()],
+        width: [clipboard.width.toString()],
+        height: [clipboard.height.toString()],
+        size: [dataUrlByteLength(dataUrl).toString()],
       };
       const win = await api.getActiveWindow();
       const result = await api.ingest("image", dataUrl, metadata, win);
@@ -85,12 +212,25 @@ export function useClipboardWatcher(
           injectedOverrideSig = null;
         }
 
-        if (clipboard.files?.value.files.length) {
-          const files = clipboard.files.value.files;
-          const sig = `files_${files.map((f) => `${f.path}_${f.size}`).join("|")}`;
+        if (clipboard.files?.value.length) {
+          const files = await api.readFiles().catch(() =>
+            clipboard.files!.value.map((path) => ({ path, size: 0 })),
+          );
+          const paths = files.map((file) => file.path);
+          const sig = `files_${clipboard.files.value.join("|")}`;
           if (sig !== lastSig) {
             lastSig = sig;
+            if (await stackFiles(paths)) return;
             await ingestFile(files);
+            return;
+          }
+        }
+
+        if (clipboard.image?.value) {
+          const sig = `img_${clipboard.image.width}x${clipboard.image.height}_${clipboard.image.value}`;
+          if (sig !== lastSig) {
+            lastSig = sig;
+            await ingestImage(clipboard.image);
             return;
           }
         }
@@ -99,16 +239,8 @@ export function useClipboardWatcher(
           const text = clipboard.text.value;
           if (text && text !== lastSig) {
             lastSig = text;
+            if (await stackText(text)) return;
             await ingestText(text);
-            return;
-          }
-        }
-
-        if (clipboard.image?.value.path) {
-          const sig = `img_${clipboard.image.value.width}x${clipboard.image.value.height}`;
-          if (sig !== lastSig) {
-            lastSig = sig;
-            await ingestImage(clipboard.image);
           }
         }
       } catch (err) {
@@ -116,22 +248,47 @@ export function useClipboardWatcher(
       }
     };
 
+    const handleStackPasteKeyDown = (event: KeyboardEvent) => {
+      const isPasteKey =
+        event.key.toLowerCase() === "v" &&
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.shiftKey;
+      if (isPasteKey && stackEnabled) {
+        stackState = null;
+        stackEnabled = false;
+        lastSig = "";
+        injectedOverrideSig = null;
+      }
+    };
+
     const setup = async () => {
       try {
-        const filePath = await getFilePath();
-        const initial = await readClipboard(true, filePath).catch(() => null);
-        if (initial?.files?.value.files.length) {
-          lastSig = `files_${initial.files.value.files.map((f) => `${f.path}_${f.size}`).join("|")}`;
+        const imagePath = await getDefaultSaveImagePath();
+        const initial = await readClipboard(imagePath).catch(() => null);
+        if (initial?.files?.value.length) {
+          lastSig = `files_${initial.files.value.join("|")}`;
         } else if (initial?.text?.value) {
           lastSig = initial.text.value;
-        } else if (initial?.image?.value.path) {
-          lastSig = `img_${initial.image.value.width}x${initial.image.value.height}`;
+        } else if (initial?.image?.value) {
+          lastSig = `img_${initial.image.width}x${initial.image.height}_${initial.image.value}`;
         }
-        await startWatch();
+        await startListening();
         unlisten = await onClipboardChange(handleClipboardChange, {
-          imageAutoSave: true,
-          filePath,
+          saveImagePath: imagePath,
         });
+        unlistenStackMode = await listen<{ direction: StackDirection }>(
+          "easycp://stack-mode",
+          ({ payload }) => {
+            if (payload?.direction === "up" || payload?.direction === "down") {
+              toggleStackMode(payload.direction);
+            }
+          },
+        );
+        unlistenStackReset = await listen("easycp://stack-reset", () => {
+          void resetStack();
+        });
+        window.addEventListener("keydown", handleStackPasteKeyDown, true);
       } catch (err) {
         onErrorRef.current("Clipboard watch setup error: " + String(err));
       }
@@ -144,6 +301,13 @@ export function useClipboardWatcher(
       if (unlisten) {
         unlisten();
       }
+      unlistenStackMode?.();
+      unlistenStackReset?.();
+      if (resetStackHandler === resetStack) {
+        resetStackHandler = null;
+      }
+      window.removeEventListener("keydown", handleStackPasteKeyDown, true);
+      stopPasteShortcutPolling();
     };
   }, []);
 }

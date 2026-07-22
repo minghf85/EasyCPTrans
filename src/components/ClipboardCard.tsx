@@ -1,4 +1,4 @@
-import { useMemo, useState, type WheelEvent } from "react";
+import { useMemo, useState, type MouseEvent, type WheelEvent } from "react";
 import {
   Check,
   CheckSquare,
@@ -58,6 +58,8 @@ interface Props {
   availableTags: string[];
   isSelected?: boolean;
   isCopied: boolean;
+  quickSlot?: number | null;
+  queueSlot?: number | null;
   onCopy: (item: HistoryItem | { id: number; content: string; contentType: "text" }) => void;
   onPaste: (item: HistoryItem) => void;
   onTogglePin: (id: number) => void;
@@ -73,6 +75,8 @@ export function ClipboardCard({
   availableTags,
   isSelected = false,
   isCopied,
+  quickSlot = null,
+  queueSlot = null,
   onCopy,
   onPaste,
   onTogglePin,
@@ -92,6 +96,15 @@ export function ClipboardCard({
   const totalSize = item.metadata?.totalSize?.[0] ?? item.metadata?.size?.[0];
   const width = item.metadata?.width?.[0];
   const height = item.metadata?.height?.[0];
+
+  const handleMenuAction = (
+    event: MouseEvent<HTMLButtonElement>,
+    action: () => void,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    action();
+  };
 
   const stopOuterScroll = (event: WheelEvent<HTMLElement>, axis: "x" | "y") => {
     const node = event.currentTarget;
@@ -118,7 +131,11 @@ export function ClipboardCard({
   const renderBody = () => {
     if (item.contentType === "image") {
       return (
-        <div className="easycp-card-body easycp-card-body-image" onWheel={(event) => stopOuterScroll(event, "y")}>
+        <div
+          className="easycp-card-body easycp-card-body-image"
+          onClick={() => onPaste(item)}
+          onWheel={(event) => stopOuterScroll(event, "y")}
+        >
           {hasPrivacy || !item.content ? (
             <div className="easycp-image-placeholder">
               <ImageIcon className="h-8 w-8" />
@@ -134,7 +151,11 @@ export function ClipboardCard({
     if (item.contentType === "file") {
       const files = item.content.split("\n").filter(Boolean);
       return (
-        <div className="easycp-card-body" onWheel={(event) => stopOuterScroll(event, "y")}>
+        <div
+          className="easycp-card-body"
+          onClick={() => onPaste(item)}
+          onWheel={(event) => stopOuterScroll(event, "y")}
+        >
           <div className="easycp-file-stack">
             {files.map((file, index) => (
               <div key={`${item.id}-${index}`} className={`easycp-file-row ${hasPrivacy ? "is-private" : ""}`}>
@@ -153,7 +174,11 @@ export function ClipboardCard({
     }
 
     return (
-      <div className="easycp-card-body" onWheel={(event) => stopOuterScroll(event, "y")}>
+      <div
+        className="easycp-card-body"
+        onClick={() => onPaste(item)}
+        onWheel={(event) => stopOuterScroll(event, "y")}
+      >
         <div className={`easycp-content-surface ${codeLike ? "is-code" : ""}`}>
           {codeLike ? (
             <pre className={`easycp-code-content ${hasPrivacy ? "is-private" : ""}`}>{item.content || "Empty text item"}</pre>
@@ -169,7 +194,6 @@ export function ClipboardCard({
     <article
       id={`history-item-${item.id}`}
       className={`easycp-card ${isSelected ? "selected" : ""}`}
-      onClick={() => onCopy(item)}
     >
       <div className="easycp-card-head">
         <div className="easycp-card-app">
@@ -191,6 +215,9 @@ export function ClipboardCard({
         </button>
       </div>
 
+      {quickSlot && <div className="easycp-card-watermark">#{quickSlot}</div>}
+      {queueSlot && <div className="easycp-card-queue-badge">Q{queueSlot}</div>}
+
       {menuOpen && (
         <>
           {tagPickerOpen && (
@@ -208,9 +235,9 @@ export function ClipboardCard({
                     <button
                       key={tag}
                       className={`easycp-card-tag-option ${active ? "active" : ""}`}
-                      onClick={() => {
+                      onClick={(event) => handleMenuAction(event, () => {
                         onToggleTag(item.id, tag);
-                      }}
+                      })}
                     >
                       {active ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
                       #{tag}
@@ -227,61 +254,61 @@ export function ClipboardCard({
             onWheel={(event) => stopOuterScroll(event, "y")}
           >
             <button
-              onClick={() => {
+              onClick={(event) => handleMenuAction(event, () => {
                 setMenuOpen(false);
                 setTagPickerOpen(false);
                 onPaste(item);
-              }}
+              })}
             >
               <MousePointerClick className="h-3.5 w-3.5" />
               Paste
             </button>
             <button
-              onClick={() => {
+              onClick={(event) => handleMenuAction(event, () => {
                 setMenuOpen(false);
                 setTagPickerOpen(false);
                 onCopy(item);
-              }}
+              })}
             >
               {isCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
               Copy
             </button>
             <button
-              onClick={() => {
+              onClick={(event) => handleMenuAction(event, () => {
                 setMenuOpen(false);
                 setTagPickerOpen(false);
                 onTogglePin(item.id);
-              }}
+              })}
             >
               <Pin className="h-3.5 w-3.5" />
               {item.pinned ? "Unpin" : "Pin"}
             </button>
             <button
-              onClick={() => {
+              onClick={(event) => handleMenuAction(event, () => {
                 setTagPickerOpen((prev) => !prev);
-              }}
+              })}
             >
               <Plus className="h-3.5 w-3.5" />
               Tag
             </button>
             <button
-              onClick={() => {
+              onClick={(event) => handleMenuAction(event, () => {
                 setMenuOpen(false);
                 setTagPickerOpen(false);
                 if (hasPrivacy) onDisablePrivacy(item.id);
                 else onEnablePrivacy(item.id);
-              }}
+              })}
             >
               {hasPrivacy ? <Shield className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
               {hasPrivacy ? "Unlock" : "Private"}
             </button>
             {item.contentType === "text" && !hasPrivacy && (
               <button
-                onClick={() => {
+                onClick={(event) => handleMenuAction(event, () => {
                   setMenuOpen(false);
                   setTagPickerOpen(false);
                   onQuickEdit(item);
-                }}
+                })}
               >
                 <PenSquare className="h-3.5 w-3.5" />
                 Edit
@@ -289,11 +316,11 @@ export function ClipboardCard({
             )}
             <button
               className="danger"
-              onClick={() => {
+              onClick={(event) => handleMenuAction(event, () => {
                 setMenuOpen(false);
                 setTagPickerOpen(false);
                 onDelete(item.id);
-              }}
+              })}
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete
