@@ -203,6 +203,8 @@ export function ClipboardCard({
           <span className="easycp-card-appname">{sourceApp(item)}</span>
         </div>
 
+        {quickSlot && <span className="easycp-card-quick-badge">#{quickSlot}</span>}
+
         <button
           className={`easycp-more-btn ${menuOpen ? "active" : ""}`}
           onClick={(e) => {
@@ -215,7 +217,6 @@ export function ClipboardCard({
         </button>
       </div>
 
-      {quickSlot && <div className="easycp-card-watermark">#{quickSlot}</div>}
       {queueSlot && <div className="easycp-card-queue-badge">Q{queueSlot}</div>}
 
       {menuOpen && (

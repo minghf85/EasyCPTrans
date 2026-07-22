@@ -377,19 +377,24 @@
   letter-spacing: 0.02em;
 }
 
-.easycp-card-watermark {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 1;
-  font-size: 66px;
+.easycp-card-quick-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 20px;
+  margin-left: auto;
+  margin-right: 28px;
+  border: 1px solid rgba(0, 103, 192, 0.18);
+  border-radius: 999px;
+  background: #eef6ff;
+  color: #0f548c;
+  font-size: 11px;
   font-weight: 800;
   line-height: 1;
-  color: rgba(15, 84, 140, 0.08);
   pointer-events: none;
   user-select: none;
-  white-space: nowrap;
 }
 
 .easycp-card-queue-badge {
