@@ -5,11 +5,11 @@ use regex::Regex;
 static EMAIL: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap());
 
-static URL: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"https?://[^\s<>\)\]'`]+").unwrap());
+static URL: Lazy<Regex> = Lazy::new(|| Regex::new(r"https?://[^\s<>\)\]'`]+").unwrap());
 
 static PHONE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?:\+?\d{1,3}[\s\-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s\-]?\d{3,4}[\s\-]?\d{3,5}").unwrap()
+    Regex::new(r"(?:\+?\d{1,3}[\s\-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s\-]?\d{3,4}[\s\-]?\d{3,5}")
+        .unwrap()
 });
 
 pub struct RegexExtractor;

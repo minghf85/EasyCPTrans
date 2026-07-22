@@ -53,7 +53,10 @@ pub struct Pipeline {
 
 pub enum PipelineOutcome {
     Accepted(ClipboardItem),
-    Dropped { interceptor: &'static str, reason: String },
+    Dropped {
+        interceptor: &'static str,
+        reason: String,
+    },
 }
 
 impl Pipeline {

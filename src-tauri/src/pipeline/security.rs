@@ -28,7 +28,10 @@ impl Interceptor for SecurityFilter {
     fn intercept(&self, item: &mut ClipboardItem) -> InterceptResult {
         if let Some(app) = &item.source_app {
             for blocked in &self.blocked_apps {
-                if app.to_ascii_lowercase().contains(&blocked.to_ascii_lowercase()) {
+                if app
+                    .to_ascii_lowercase()
+                    .contains(&blocked.to_ascii_lowercase())
+                {
                     return InterceptResult::Stop(format!("source app blocked: {}", blocked));
                 }
             }

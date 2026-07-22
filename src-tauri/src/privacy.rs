@@ -44,7 +44,8 @@ pub fn load_privacy_config(app: &AppHandle) -> Result<PrivacyConfig, String> {
         return Ok(PrivacyConfig::default());
     }
 
-    let raw = std::fs::read_to_string(&path).map_err(|e| format!("Read privacy config failed: {}", e))?;
+    let raw =
+        std::fs::read_to_string(&path).map_err(|e| format!("Read privacy config failed: {}", e))?;
     let cfg = serde_json::from_str::<PrivacyConfig>(&raw)
         .map_err(|e| format!("Parse privacy config failed: {}", e))?;
     Ok(cfg)
@@ -57,7 +58,8 @@ pub fn save_privacy_config(app: &AppHandle, cfg: &PrivacyConfig) -> Result<(), S
         .map_err(|e| e.to_string())?
         .join(PRIVACY_FILE);
 
-    let raw = serde_json::to_string(cfg).map_err(|e| format!("Serialize privacy config failed: {}", e))?;
+    let raw = serde_json::to_string(cfg)
+        .map_err(|e| format!("Serialize privacy config failed: {}", e))?;
     std::fs::write(&path, raw).map_err(|e| format!("Write privacy config failed: {}", e))
 }
 
@@ -147,7 +149,8 @@ fn derive_key(cfg: &PrivacyConfig) -> Result<[u8; 32], String> {
 
 pub fn encrypt_content(cfg: &PrivacyConfig, plain: &str) -> Result<String, String> {
     let key = derive_key(cfg)?;
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Create cipher failed: {}", e))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Create cipher failed: {}", e))?;
 
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -164,7 +167,11 @@ pub fn encrypt_content(cfg: &PrivacyConfig, plain: &str) -> Result<String, Strin
     ))
 }
 
-pub fn decrypt_content(cfg: &PrivacyConfig, password: &str, encrypted_payload: &str) -> Result<String, String> {
+pub fn decrypt_content(
+    cfg: &PrivacyConfig,
+    password: &str,
+    encrypted_payload: &str,
+) -> Result<String, String> {
     verify_password(cfg, password)?;
 
     let mut parts = encrypted_payload.splitn(3, ':');
@@ -179,7 +186,8 @@ pub fn decrypt_content(cfg: &PrivacyConfig, password: &str, encrypted_payload: &
     }
 
     let key = derive_key(cfg)?;
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Create cipher failed: {}", e))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Create cipher failed: {}", e))?;
 
     let nonce = B64
         .decode(nonce_b64)
