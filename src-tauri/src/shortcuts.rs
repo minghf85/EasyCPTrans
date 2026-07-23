@@ -36,6 +36,7 @@ struct QueueState {
 const QUEUE_UPDATED_EVENT_NAME: &str = "easycp://queue-updated";
 const STACK_MODE_EVENT_NAME: &str = "easycp://stack-mode";
 const STACK_RESET_EVENT_NAME: &str = "easycp://stack-reset";
+const CLIPBOARD_OVERRIDE_EVENT_NAME: &str = "easycp://clipboard-override";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +48,12 @@ struct QueueUpdatedEvent {
 #[serde(rename_all = "camelCase")]
 struct StackModeEvent {
     direction: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardOverrideEvent {
+    sig: String,
 }
 
 #[derive(Debug, Clone)]
@@ -263,7 +270,41 @@ struct ShortcutClipboardItem {
     id: i64,
     content_type: String,
     content: String,
+    metadata: HashMap<String, Vec<String>>,
     is_private: bool,
+}
+
+impl ShortcutClipboardItem {
+    fn override_sig(&self) -> String {
+        match self.content_type.as_str() {
+            "file" => format!(
+                "files_{}",
+                self.content
+                    .split('\n')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ),
+            "image" => {
+                if self.content.starts_with("data:image") {
+                    format!("image_item_{}", self.id)
+                } else {
+                    format!("img_path_{}", self.content)
+                }
+            }
+            _ => self.content.clone(),
+        }
+    }
+}
+
+fn emit_clipboard_override<R: Runtime>(app: &AppHandle<R>, sig: String) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.emit(
+            CLIPBOARD_OVERRIDE_EVENT_NAME,
+            ClipboardOverrideEvent { sig },
+        );
+    }
 }
 
 async fn load_recent_item<R: Runtime>(
@@ -272,7 +313,7 @@ async fn load_recent_item<R: Runtime>(
 ) -> Result<Option<ShortcutClipboardItem>, String> {
     let state = app.state::<AppState>();
     let row = sqlx::query(
-        "SELECT id, content_type, preview_text, storage_path, is_private
+        "SELECT id, content_type, preview_text, storage_path, metadata, is_private
          FROM clipboard_items
          ORDER BY is_pinned DESC, id DESC
          LIMIT 1 OFFSET ?1",
@@ -286,6 +327,11 @@ async fn load_recent_item<R: Runtime>(
         let content_type: String = row.get("content_type");
         let preview: Option<String> = row.try_get("preview_text").ok();
         let storage: Option<String> = row.try_get("storage_path").ok();
+        let metadata = row
+            .try_get::<String, _>("metadata")
+            .ok()
+            .and_then(|value| serde_json::from_str::<HashMap<String, Vec<String>>>(&value).ok())
+            .unwrap_or_default();
         let content = if content_type == "text" {
             preview.unwrap_or_default()
         } else {
@@ -296,6 +342,7 @@ async fn load_recent_item<R: Runtime>(
             id: row.get("id"),
             content_type,
             content,
+            metadata,
             is_private: row.try_get::<i64, _>("is_private").unwrap_or(0) != 0,
         }
     }))
@@ -307,7 +354,7 @@ async fn load_item_by_id<R: Runtime>(
 ) -> Result<Option<ShortcutClipboardItem>, String> {
     let state = app.state::<AppState>();
     let row = sqlx::query(
-        "SELECT id, content_type, preview_text, storage_path, is_private
+        "SELECT id, content_type, preview_text, storage_path, metadata, is_private
          FROM clipboard_items
          WHERE id = ?1
          LIMIT 1",
@@ -321,6 +368,11 @@ async fn load_item_by_id<R: Runtime>(
         let content_type: String = row.get("content_type");
         let preview: Option<String> = row.try_get("preview_text").ok();
         let storage: Option<String> = row.try_get("storage_path").ok();
+        let metadata = row
+            .try_get::<String, _>("metadata")
+            .ok()
+            .and_then(|value| serde_json::from_str::<HashMap<String, Vec<String>>>(&value).ok())
+            .unwrap_or_default();
         let content = if content_type == "text" {
             preview.unwrap_or_default()
         } else {
@@ -331,6 +383,7 @@ async fn load_item_by_id<R: Runtime>(
             id: row.get("id"),
             content_type,
             content,
+            metadata,
             is_private: row.try_get::<i64, _>("is_private").unwrap_or(0) != 0,
         }
     }))
@@ -356,53 +409,73 @@ async fn write_item_to_clipboard<R: Runtime>(
     item: &ShortcutClipboardItem,
     plain_text: bool,
 ) -> Result<(), String> {
+    let started = Instant::now();
+    println!(
+        "[EasyCPTrans] Shortcut write clipboard start: id={}, type={}, plain_text={}",
+        item.id, item.content_type, plain_text
+    );
     if item.is_private {
         return Err("This item is private. Unlock it before pasting.".to_string());
     }
 
-    if plain_text {
+    let result = if plain_text {
         match item.content_type.as_str() {
-            "text" | "file" => {
-                return tauri_plugin_clipboard_x::write_text(item.content.clone()).await
-            }
-            _ => {
-                return Err(
-                    "Plain-text paste is only supported for text and file items.".to_string(),
-                )
-            }
+            "text" | "file" => tauri_plugin_clipboard_x::write_text(item.content.clone()).await,
+            _ => Err("Plain-text paste is only supported for text and file items.".to_string()),
         }
-    }
-
-    match item.content_type.as_str() {
-        "text" => tauri_plugin_clipboard_x::write_text(item.content.clone()).await,
-        "file" => {
-            let files = item
-                .content
-                .split('\n')
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .collect::<Vec<_>>();
-            if files.is_empty() {
-                return Err("No files to paste.".to_string());
+    } else {
+        match item.content_type.as_str() {
+            "text" => tauri_plugin_clipboard_x::write_text(item.content.clone()).await,
+            "file" => {
+                let files = item
+                    .content
+                    .split('\n')
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>();
+                if files.is_empty() {
+                    return Err("No files to paste.".to_string());
+                }
+                tauri_plugin_clipboard_x::write_files(files).await
             }
-            tauri_plugin_clipboard_x::write_files(files).await
+            "image" => {
+                let image_path = if item.content.starts_with("data:image") {
+                    save_data_url_image(app, item)?
+                } else {
+                    item.content.clone()
+                };
+                tauri_plugin_clipboard_x::write_image(image_path).await
+            }
+            _ => Err(format!(
+                "Unsupported clipboard item type: {}",
+                item.content_type
+            )),
         }
-        "image" => {
-            let image_path = if item.content.starts_with("data:image") {
-                save_data_url_image(app, &item.content)?
-            } else {
-                item.content.clone()
-            };
-            tauri_plugin_clipboard_x::write_image(image_path).await
-        }
-        _ => Err(format!(
-            "Unsupported clipboard item type: {}",
-            item.content_type
-        )),
-    }
+    };
+    println!(
+        "[EasyCPTrans] Shortcut write clipboard finish: id={}, type={}, ok={}, elapsed_ms={}",
+        item.id,
+        item.content_type,
+        result.is_ok(),
+        started.elapsed().as_millis()
+    );
+    result
 }
 
-fn save_data_url_image<R: Runtime>(app: &AppHandle<R>, data_url: &str) -> Result<String, String> {
+fn save_data_url_image<R: Runtime>(
+    app: &AppHandle<R>,
+    item: &ShortcutClipboardItem,
+) -> Result<String, String> {
+    if let Some(path) = item
+        .metadata
+        .get("shortcutImagePath")
+        .and_then(|values| values.first())
+        .filter(|path| std::path::Path::new(path.as_str()).exists())
+    {
+        return Ok(path.clone());
+    }
+
+    let data_url = &item.content;
     let (header, encoded) = data_url
         .split_once(',')
         .ok_or_else(|| "invalid data url".to_string())?;
@@ -430,13 +503,11 @@ fn save_data_url_image<R: Runtime>(app: &AppHandle<R>, data_url: &str) -> Result
         .join("temp");
     fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
-    let filename = format!(
-        "shortcut-image-{}.{}",
-        chrono::Utc::now().timestamp_millis(),
-        extension
-    );
+    let filename = format!("shortcut-image-{}.{}", item.id, extension);
     let image_path = temp_dir.join(filename);
-    fs::write(&image_path, bytes).map_err(|e| e.to_string())?;
+    if !image_path.exists() {
+        fs::write(&image_path, bytes).map_err(|e| e.to_string())?;
+    }
     Ok(image_path.to_string_lossy().to_string())
 }
 
@@ -454,6 +525,7 @@ async fn execute_recent_paste<R: Runtime>(app: AppHandle<R>, index: usize) -> Re
         "[EasyCPTrans] Quick paste loading item: id={}, index={}, type={}",
         item.id, index, item.content_type
     );
+    emit_clipboard_override(&app, item.override_sig());
     write_item_to_clipboard(&app, &item, false).await?;
     println!(
         "[EasyCPTrans] Quick paste wrote clipboard for item {}",
@@ -505,6 +577,7 @@ async fn execute_queue_step<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
         "[EasyCPTrans] Queue step loading item: id={}, type={}",
         item.id, item.content_type
     );
+    emit_clipboard_override(&app, item.override_sig());
     write_item_to_clipboard(&app, &item, false).await?;
     println!(
         "[EasyCPTrans] Queue step wrote clipboard for item {}",

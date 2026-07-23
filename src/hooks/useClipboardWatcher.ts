@@ -30,6 +30,7 @@ let resetStackHandler: (() => Promise<void>) | null = null;
 let stackEnabled = false;
 let pastePollTimer: number | null = null;
 let translationSuppressUntil = 0;
+let clipboardWriteSuppressUntil = 0;
 
 export function resetClipboardStack() {
   return resetStackHandler?.() ?? Promise.resolve();
@@ -70,6 +71,7 @@ export function useClipboardWatcher(
     let unlistenStackMode: (() => void) | null = null;
     let unlistenStackReset: (() => void) | null = null;
     let unlistenTranslationState: (() => void) | null = null;
+    let unlistenClipboardOverride: (() => void) | null = null;
     let stackState: StackState | null = null;
     let pastePollBusy = false;
 
@@ -222,6 +224,7 @@ export function useClipboardWatcher(
           const sig = `files_${clipboard.files.value.join("|")}`;
           if (sig !== lastSig) {
             lastSig = sig;
+            if (Date.now() < clipboardWriteSuppressUntil || Date.now() < translationSuppressUntil) return;
             if (await stackFiles(paths)) return;
             await ingestFile(files);
             return;
@@ -232,6 +235,7 @@ export function useClipboardWatcher(
           const sig = `img_${clipboard.image.width}x${clipboard.image.height}_${clipboard.image.value}`;
           if (sig !== lastSig) {
             lastSig = sig;
+            if (Date.now() < clipboardWriteSuppressUntil || Date.now() < translationSuppressUntil) return;
             await ingestImage(clipboard.image);
             return;
           }
@@ -241,7 +245,7 @@ export function useClipboardWatcher(
           const text = clipboard.text.value;
           if (text && text !== lastSig) {
             lastSig = text;
-            if (Date.now() < translationSuppressUntil) return;
+            if (Date.now() < clipboardWriteSuppressUntil || Date.now() < translationSuppressUntil) return;
             if (await stackText(text)) return;
             await ingestText(text);
           }
@@ -305,6 +309,20 @@ export function useClipboardWatcher(
           translationSuppressUntil = Date.now() + 1_500;
           injectedOverrideSig = null;
         });
+        unlistenClipboardOverride = await listen<{ sig: string }>(
+          "easycp://clipboard-override",
+          ({ payload }) => {
+            if (!payload?.sig) return;
+            injectedOverrideSig = payload.sig;
+            lastSig = payload.sig;
+            clipboardWriteSuppressUntil = Date.now() + 2_000;
+            window.setTimeout(() => {
+              if (injectedOverrideSig === payload.sig) {
+                injectedOverrideSig = null;
+              }
+            }, 2_000);
+          },
+        );
         window.addEventListener("keydown", handleStackPasteKeyDown, true);
       } catch (err) {
         onErrorRef.current("Clipboard watch setup error: " + String(err));
@@ -321,6 +339,7 @@ export function useClipboardWatcher(
       unlistenStackMode?.();
       unlistenStackReset?.();
       unlistenTranslationState?.();
+      unlistenClipboardOverride?.();
       if (resetStackHandler === resetStack) {
         resetStackHandler = null;
       }

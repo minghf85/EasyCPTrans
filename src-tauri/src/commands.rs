@@ -863,6 +863,13 @@ pub async fn ingest_clipboard(
     state: State<'_, AppState>,
     payload: IngestPayload,
 ) -> Result<IngestResult, String> {
+    println!(
+        "[EasyCPTrans] Ingest start: type={}, content={}, metadata_keys={:?}, source_app={:?}",
+        payload.content_type,
+        log_text_preview(&payload.content),
+        payload.metadata.keys().collect::<Vec<_>>(),
+        payload.source_app
+    );
     let mut metadata = payload.metadata;
     if let Some(app_name) = payload.source_app {
         if !app_name.is_empty() {
@@ -883,6 +890,10 @@ pub async fn ingest_clipboard(
             interceptor,
             reason,
         } => {
+            println!(
+                "[EasyCPTrans] Ingest dropped by pipeline: interceptor={}, reason={}",
+                interceptor, reason
+            );
             return Ok(IngestResult {
                 accepted: false,
                 item_id: None,
@@ -894,9 +905,20 @@ pub async fn ingest_clipboard(
             });
         }
     };
+    println!(
+        "[EasyCPTrans] Ingest pipeline accepted: type={}, content={}, tags={:?}, metadata_keys={:?}",
+        processed.content_type,
+        log_text_preview(&processed.content),
+        processed.tags,
+        processed.metadata.keys().collect::<Vec<_>>()
+    );
 
     let pool = &state.pool;
     let hash = compute_hash(&processed.content_type, &processed.content);
+    println!(
+        "[EasyCPTrans] Ingest hash computed: type={}, hash={}",
+        processed.content_type, hash
+    );
 
     let existing = sqlx::query(
         "SELECT id, tags FROM clipboard_items WHERE content_hash = ?1 AND (is_private IS NULL OR is_private = 0) LIMIT 1",
@@ -916,6 +938,7 @@ pub async fn ingest_clipboard(
 
     let (item_id, deduped) = if let Some(row) = existing {
         let id: i64 = row.get("id");
+        println!("[EasyCPTrans] Ingest dedupe update: existing_id={}", id);
         sqlx::query(
             "UPDATE clipboard_items
              SET last_used_at = CURRENT_TIMESTAMP,
@@ -952,10 +975,18 @@ pub async fn ingest_clipboard(
         .await
         .map_err(|e| e.to_string())?
         .last_insert_rowid();
+        println!(
+            "[EasyCPTrans] Ingest inserted new item: id={}, type={}",
+            new_id, processed.content_type
+        );
         (new_id, false)
     };
 
     emit_changed(&app).await;
+    println!(
+        "[EasyCPTrans] Ingest finish: accepted=true, id={}, deduped={}",
+        item_id, deduped
+    );
 
     Ok(IngestResult {
         accepted: true,
