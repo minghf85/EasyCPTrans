@@ -47,6 +47,10 @@ const DEFAULT_QUEUE_STEP_SHORTCUT = "CommandOrControl+Alt+V";
 const DEFAULT_QUICK_PASTE_PREFIX = "CommandOrControl+Shift";
 const DEFAULT_STACK_SHORTCUT_PREFIX = "CommandOrControl+Alt";
 const DEFAULT_WORD_TRANSLATE_SHORTCUT = "Alt+C";
+const DEFAULT_ITEM_TAG_SHORTCUT = "T";
+const DEFAULT_ITEM_PRIVATE_SHORTCUT = "M";
+const DEFAULT_ITEM_PIN_SHORTCUT = "P";
+const DEFAULT_ITEM_DELETE_SHORTCUT = "Delete";
 const DEFAULT_TAG_COLOR = "#0f6cbd";
 const SYSTEM_TAGS: Array<ManagedTag & { key: ActiveView }> = [
   { id: "sys-text", name: "Text", common: true, color: "#0078d4", system: true, key: "text" },
@@ -109,6 +113,38 @@ function normalizeShortcutValue(value: string | null | undefined, fallback: stri
   return trimmed || fallback;
 }
 
+function normalizeLocalShortcut(value: string) {
+  return value
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase();
+      if (["ctrl", "control", "commandorcontrol", "cmdorctrl"].includes(lower)) return "CommandOrControl";
+      if (lower === "shift") return "Shift";
+      if (["alt", "option"].includes(lower)) return "Alt";
+      if (["super", "meta", "win", "windows", "command", "cmd"].includes(lower)) return "Super";
+      if (lower === "delete" || lower === "del") return "Delete";
+      if (lower === "escape" || lower === "esc") return "Esc";
+      if (part.length === 1) return part.toUpperCase();
+      return part;
+    })
+    .join("+");
+}
+
+function eventToLocalShortcut(event: KeyboardEvent) {
+  const parts: string[] = [];
+  if (event.ctrlKey || event.metaKey) parts.push("CommandOrControl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.key === "Delete") parts.push("Delete");
+  else if (event.key === "Escape") parts.push("Esc");
+  else if (!["Control", "Meta", "Alt", "Shift"].includes(event.key)) {
+    parts.push(event.key.length === 1 ? event.key.toUpperCase() : event.key);
+  }
+  return normalizeLocalShortcut(parts.join("+"));
+}
+
 function migrateQuickPastePrefix(value: string) {
   return value === "Super+Shift" ? DEFAULT_QUICK_PASTE_PREFIX : value;
 }
@@ -134,12 +170,17 @@ function MainApp() {
   const [autoPaste, setAutoPaste] = useState(true);
   const [keepWindowOpen, setKeepWindowOpen] = useState(false);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  const [itemTagShortcut, setItemTagShortcut] = useState(DEFAULT_ITEM_TAG_SHORTCUT);
+  const [itemPrivateShortcut, setItemPrivateShortcut] = useState(DEFAULT_ITEM_PRIVATE_SHORTCUT);
+  const [itemPinShortcut, setItemPinShortcut] = useState(DEFAULT_ITEM_PIN_SHORTCUT);
+  const [itemDeleteShortcut, setItemDeleteShortcut] = useState(DEFAULT_ITEM_DELETE_SHORTCUT);
   const [pageSize, setPageSize] = useState(50);
   const [historyLimit, setHistoryLimit] = useState(5000);
   const [managedTags, setManagedTags] = useState<ManagedTag[]>([]);
   const [tagManageBusy, setTagManageBusy] = useState(false);
   const [tagSelectorOpen, setTagSelectorOpen] = useState(false);
   const [tagSelectorStyle, setTagSelectorStyle] = useState<CSSProperties>({});
+  const [quickTagItemId, setQuickTagItemId] = useState<number | null>(null);
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [queuedIds, setQueuedIds] = useState<number[]>([]);
@@ -173,12 +214,20 @@ function MainApp() {
           cfg.wordTranslateShortcut,
           DEFAULT_WORD_TRANSLATE_SHORTCUT,
         );
+        const nextItemTagShortcut = normalizeShortcutValue(cfg.itemTagShortcut, DEFAULT_ITEM_TAG_SHORTCUT);
+        const nextItemPrivateShortcut = normalizeShortcutValue(cfg.itemPrivateShortcut, DEFAULT_ITEM_PRIVATE_SHORTCUT);
+        const nextItemPinShortcut = normalizeShortcutValue(cfg.itemPinShortcut, DEFAULT_ITEM_PIN_SHORTCUT);
+        const nextItemDeleteShortcut = normalizeShortcutValue(cfg.itemDeleteShortcut, DEFAULT_ITEM_DELETE_SHORTCUT);
         if (
           nextShortcut !== (cfg.shortcut ?? "") ||
           nextQueueStepShortcut !== (cfg.queueStepShortcut ?? "") ||
           nextQuickPastePrefix !== (cfg.quickPastePrefix ?? "") ||
           nextStackShortcutPrefix !== (cfg.stackShortcutPrefix ?? "") ||
-          nextWordTranslateShortcut !== (cfg.wordTranslateShortcut ?? "")
+          nextWordTranslateShortcut !== (cfg.wordTranslateShortcut ?? "") ||
+          nextItemTagShortcut !== (cfg.itemTagShortcut ?? "") ||
+          nextItemPrivateShortcut !== (cfg.itemPrivateShortcut ?? "") ||
+          nextItemPinShortcut !== (cfg.itemPinShortcut ?? "") ||
+          nextItemDeleteShortcut !== (cfg.itemDeleteShortcut ?? "")
         ) {
           void api.setConfig({
             shortcut: nextShortcut,
@@ -186,8 +235,16 @@ function MainApp() {
             quickPastePrefix: nextQuickPastePrefix,
             stackShortcutPrefix: nextStackShortcutPrefix,
             wordTranslateShortcut: nextWordTranslateShortcut,
+            itemTagShortcut: nextItemTagShortcut,
+            itemPrivateShortcut: nextItemPrivateShortcut,
+            itemPinShortcut: nextItemPinShortcut,
+            itemDeleteShortcut: nextItemDeleteShortcut,
           }).catch(console.error);
         }
+        setItemTagShortcut(normalizeLocalShortcut(nextItemTagShortcut));
+        setItemPrivateShortcut(normalizeLocalShortcut(nextItemPrivateShortcut));
+        setItemPinShortcut(normalizeLocalShortcut(nextItemPinShortcut));
+        setItemDeleteShortcut(normalizeLocalShortcut(nextItemDeleteShortcut));
         if (typeof cfg.autoPaste === "boolean") setAutoPaste(cfg.autoPaste);
         if (typeof cfg.keepWindowOpen === "boolean") setKeepWindowOpen(cfg.keepWindowOpen);
         if (typeof cfg.alwaysOnTop === "boolean") setAlwaysOnTop(cfg.alwaysOnTop);
@@ -703,6 +760,10 @@ function MainApp() {
     quickPastePrefix: string;
     stackShortcutPrefix: string;
     wordTranslateShortcut: string;
+    itemTagShortcut: string;
+    itemPrivateShortcut: string;
+    itemPinShortcut: string;
+    itemDeleteShortcut: string;
     autoPaste: boolean;
     keepWindowOpen: boolean;
     alwaysOnTop: boolean;
@@ -716,6 +777,10 @@ function MainApp() {
     setAutoPaste(settings.autoPaste);
     setKeepWindowOpen(settings.keepWindowOpen);
     setAlwaysOnTop(settings.alwaysOnTop);
+    setItemTagShortcut(normalizeLocalShortcut(settings.itemTagShortcut));
+    setItemPrivateShortcut(normalizeLocalShortcut(settings.itemPrivateShortcut));
+    setItemPinShortcut(normalizeLocalShortcut(settings.itemPinShortcut));
+    setItemDeleteShortcut(normalizeLocalShortcut(settings.itemDeleteShortcut));
     setPageSize(settings.pageSize);
     setHistoryLimit(settings.historyLimit);
   };
@@ -754,6 +819,18 @@ function MainApp() {
       return;
     }
     setPrivacyAction({ id });
+  };
+
+  const currentSelectedItem = () =>
+    currentPageItems.find((item) => item.id === selectedId) ?? currentPageItems[0] ?? null;
+
+  const openQuickTagPicker = (item: HistoryItem) => {
+    setSelectedId(item.id);
+    setQuickTagItemId((current) => (current === item.id ? null : item.id));
+  };
+
+  const closeQuickTagPicker = () => {
+    setQuickTagItemId(null);
   };
 
   const handlePrivacyConfirm = async (password: string) => {
@@ -952,6 +1029,10 @@ function MainApp() {
       if (event.key === "Escape") {
         event.preventDefault();
         if (privacyAction) return;
+        if (quickTagItemId !== null) {
+          closeQuickTagPicker();
+          return;
+        }
         if (searchOpen) {
           setSearchOpen(false);
           setSearch("");
@@ -992,6 +1073,33 @@ function MainApp() {
         return;
       }
 
+      {
+        const shortcut = eventToLocalShortcut(event);
+        const selected = currentSelectedItem();
+        if (selected && shortcut === normalizeLocalShortcut(itemTagShortcut)) {
+          event.preventDefault();
+          openQuickTagPicker(selected);
+          return;
+        }
+        if (selected && shortcut === normalizeLocalShortcut(itemPrivateShortcut)) {
+          event.preventDefault();
+          if (selected.isPrivate) handleDisablePrivacy(selected.id);
+          else handleEnablePrivacy(selected.id);
+          return;
+        }
+        if (selected && shortcut === normalizeLocalShortcut(itemPinShortcut)) {
+          event.preventDefault();
+          handleTogglePin(selected.id);
+          return;
+        }
+        if (selected && shortcut === normalizeLocalShortcut(itemDeleteShortcut)) {
+          event.preventDefault();
+          if (quickTagItemId === selected.id) closeQuickTagPicker();
+          handleDelete(selected.id);
+          return;
+        }
+      }
+
       if (event.key === "Enter") {
         event.preventDefault();
         if (currentPageItems.length === 0) return;
@@ -1018,7 +1126,7 @@ function MainApp() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeView, currentPageItems, privacyAction, searchOpen, selectedId, queuedIds, sourceHistory, cardRows, page, totalPages]);
+  }, [activeView, currentPageItems, privacyAction, quickTagItemId, searchOpen, selectedId, queuedIds, sourceHistory, cardRows, page, totalPages, alwaysOnTop, itemTagShortcut, itemPrivateShortcut, itemPinShortcut, itemDeleteShortcut]);
 
   const onTabClick = (key: ActiveView, event?: React.MouseEvent<HTMLButtonElement>) => {
     if (key === "tag-selector") {
@@ -1277,6 +1385,8 @@ function MainApp() {
                   onEnablePrivacy={handleEnablePrivacy}
                   onDisablePrivacy={handleDisablePrivacy}
                   onQuickEdit={handleQuickEdit}
+                  tagMenuOpen={quickTagItemId === item.id}
+                  onTagMenuClose={closeQuickTagPicker}
                 />
               ))}
             {page < totalPages - 1 && (

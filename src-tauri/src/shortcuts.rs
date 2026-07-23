@@ -315,7 +315,7 @@ async fn load_recent_item<R: Runtime>(
     let row = sqlx::query(
         "SELECT id, content_type, preview_text, storage_path, metadata, is_private
          FROM clipboard_items
-         ORDER BY is_pinned DESC, id DESC
+         ORDER BY is_pinned DESC, last_used_at DESC, id DESC
          LIMIT 1 OFFSET ?1",
     )
     .bind(index as i64)

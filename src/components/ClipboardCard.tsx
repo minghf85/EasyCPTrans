@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent, type WheelEvent } from "react";
+import { useEffect, useMemo, useState, type MouseEvent, type WheelEvent } from "react";
 import {
   Check,
   CheckSquare,
@@ -144,6 +144,8 @@ interface Props {
   onEnablePrivacy: (id: number) => void;
   onDisablePrivacy: (id: number) => void;
   onQuickEdit: (item: HistoryItem) => void;
+  tagMenuOpen?: boolean;
+  onTagMenuClose?: () => void;
 }
 
 export function ClipboardCard({
@@ -161,6 +163,8 @@ export function ClipboardCard({
   onEnablePrivacy,
   onDisablePrivacy,
   onQuickEdit,
+  tagMenuOpen = false,
+  onTagMenuClose,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
@@ -175,6 +179,22 @@ export function ClipboardCard({
   const translationState = translationStatus(item);
   const translationWord = translationQuery(item);
   const isTranslationItem = item.tags.includes("Word") || Boolean(translationState || translationWord);
+
+  useEffect(() => {
+    if (tagMenuOpen) {
+      setMenuOpen(true);
+      setTagPickerOpen(true);
+    } else {
+      setTagPickerOpen(false);
+      setMenuOpen(false);
+    }
+  }, [tagMenuOpen]);
+
+  const closeMenus = () => {
+    setMenuOpen(false);
+    setTagPickerOpen(false);
+    onTagMenuClose?.();
+  };
 
   const handleMenuAction = (
     event: MouseEvent<HTMLButtonElement>,
@@ -306,7 +326,11 @@ export function ClipboardCard({
           className={`easycp-more-btn ${menuOpen ? "active" : ""}`}
           onClick={(e) => {
             e.stopPropagation();
-            setMenuOpen((prev) => !prev);
+            if (menuOpen) {
+              closeMenus();
+            } else {
+              setMenuOpen(true);
+            }
           }}
           title="More actions"
         >
@@ -353,8 +377,7 @@ export function ClipboardCard({
           >
             <button
               onClick={(event) => handleMenuAction(event, () => {
-                setMenuOpen(false);
-                setTagPickerOpen(false);
+                closeMenus();
                 onPaste(item);
               })}
             >
@@ -363,8 +386,7 @@ export function ClipboardCard({
             </button>
             <button
               onClick={(event) => handleMenuAction(event, () => {
-                setMenuOpen(false);
-                setTagPickerOpen(false);
+                closeMenus();
                 onCopy(item);
               })}
             >
@@ -373,8 +395,7 @@ export function ClipboardCard({
             </button>
             <button
               onClick={(event) => handleMenuAction(event, () => {
-                setMenuOpen(false);
-                setTagPickerOpen(false);
+                closeMenus();
                 onTogglePin(item.id);
               })}
             >
@@ -383,7 +404,11 @@ export function ClipboardCard({
             </button>
             <button
               onClick={(event) => handleMenuAction(event, () => {
-                setTagPickerOpen((prev) => !prev);
+                setTagPickerOpen((prev) => {
+                  const next = !prev;
+                  if (!next) onTagMenuClose?.();
+                  return next;
+                });
               })}
             >
               <Plus className="h-3.5 w-3.5" />
@@ -391,8 +416,7 @@ export function ClipboardCard({
             </button>
             <button
               onClick={(event) => handleMenuAction(event, () => {
-                setMenuOpen(false);
-                setTagPickerOpen(false);
+                closeMenus();
                 if (hasPrivacy) onDisablePrivacy(item.id);
                 else onEnablePrivacy(item.id);
               })}
@@ -403,8 +427,7 @@ export function ClipboardCard({
             {item.contentType === "text" && !hasPrivacy && (
               <button
                 onClick={(event) => handleMenuAction(event, () => {
-                  setMenuOpen(false);
-                  setTagPickerOpen(false);
+                  closeMenus();
                   onQuickEdit(item);
                 })}
               >
@@ -415,8 +438,7 @@ export function ClipboardCard({
             <button
               className="danger"
               onClick={(event) => handleMenuAction(event, () => {
-                setMenuOpen(false);
-                setTagPickerOpen(false);
+                closeMenus();
                 onDelete(item.id);
               })}
             >

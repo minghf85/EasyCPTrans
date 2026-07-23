@@ -211,6 +211,10 @@ pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfi
         quick_paste_prefix: default_quick_paste_prefix(),
         stack_shortcut_prefix: default_stack_shortcut_prefix(),
         word_translate_shortcut: default_word_translate_shortcut(),
+        item_tag_shortcut: default_item_tag_shortcut(),
+        item_private_shortcut: default_item_private_shortcut(),
+        item_pin_shortcut: default_item_pin_shortcut(),
+        item_delete_shortcut: default_item_delete_shortcut(),
         ecdict_path: String::new(),
         auto_paste: true,
         keep_window_open: false,
@@ -1024,7 +1028,7 @@ pub async fn load_history(
         "SELECT id, content_type, preview_text, storage_path, created_at, last_used_at,
                 use_count, is_pinned, is_private, tags, metadata
          FROM clipboard_items
-         ORDER BY is_pinned DESC, id DESC
+         ORDER BY is_pinned DESC, last_used_at DESC, id DESC
          LIMIT ?1",
     )
     .bind(limit)
@@ -1272,8 +1276,7 @@ pub async fn protect_item(
              preview_text = NULL,
              storage_path = NULL,
              metadata = '{}',
-             tags = ?2,
-             last_used_at = CURRENT_TIMESTAMP
+             tags = ?2
          WHERE id = ?3",
     )
     .bind(&encrypted)
@@ -1338,8 +1341,7 @@ pub async fn unprotect_item(
              content_hash = ?1,
              preview_text = ?2,
              storage_path = ?3,
-             tags = ?4,
-             last_used_at = CURRENT_TIMESTAMP
+             tags = ?4
          WHERE id = ?5",
     )
     .bind(&hash)
@@ -1363,7 +1365,8 @@ pub async fn toggle_pin(
 ) -> Result<bool, String> {
     let res = sqlx::query(
         "UPDATE clipboard_items
-         SET is_pinned = CASE WHEN is_pinned = 1 THEN 0 ELSE 1 END
+         SET is_pinned = CASE WHEN is_pinned = 1 THEN 0 ELSE 1 END,
+             last_used_at = CURRENT_TIMESTAMP
          WHERE id = ?1
          RETURNING is_pinned",
     )
@@ -1920,6 +1923,14 @@ pub struct AppConfig {
     pub stack_shortcut_prefix: String,
     #[serde(default = "default_word_translate_shortcut")]
     pub word_translate_shortcut: String,
+    #[serde(default = "default_item_tag_shortcut")]
+    pub item_tag_shortcut: String,
+    #[serde(default = "default_item_private_shortcut")]
+    pub item_private_shortcut: String,
+    #[serde(default = "default_item_pin_shortcut")]
+    pub item_pin_shortcut: String,
+    #[serde(default = "default_item_delete_shortcut")]
+    pub item_delete_shortcut: String,
     #[serde(default)]
     pub ecdict_path: String,
     #[serde(default = "default_auto_paste")]
@@ -1972,6 +1983,18 @@ fn default_stack_shortcut_prefix() -> String {
 fn default_word_translate_shortcut() -> String {
     "Alt+C".to_string()
 }
+fn default_item_tag_shortcut() -> String {
+    "T".to_string()
+}
+fn default_item_private_shortcut() -> String {
+    "M".to_string()
+}
+fn default_item_pin_shortcut() -> String {
+    "P".to_string()
+}
+fn default_item_delete_shortcut() -> String {
+    "Delete".to_string()
+}
 fn default_keep_window_open() -> bool {
     false
 }
@@ -1998,6 +2021,10 @@ pub struct ConfigResponse {
     pub quick_paste_prefix: String,
     pub stack_shortcut_prefix: String,
     pub word_translate_shortcut: String,
+    pub item_tag_shortcut: String,
+    pub item_private_shortcut: String,
+    pub item_pin_shortcut: String,
+    pub item_delete_shortcut: String,
     pub ecdict_path: String,
     pub default_dir: String,
     pub effective_dir: String,
@@ -2028,6 +2055,10 @@ pub struct PartialAppConfig {
     pub quick_paste_prefix: Option<String>,
     pub stack_shortcut_prefix: Option<String>,
     pub word_translate_shortcut: Option<String>,
+    pub item_tag_shortcut: Option<String>,
+    pub item_private_shortcut: Option<String>,
+    pub item_pin_shortcut: Option<String>,
+    pub item_delete_shortcut: Option<String>,
     pub ecdict_path: Option<String>,
     pub auto_paste: Option<bool>,
     pub keep_window_open: Option<bool>,
@@ -2066,6 +2097,10 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
         quick_paste_prefix: conf.quick_paste_prefix,
         stack_shortcut_prefix: conf.stack_shortcut_prefix,
         word_translate_shortcut: conf.word_translate_shortcut,
+        item_tag_shortcut: conf.item_tag_shortcut,
+        item_private_shortcut: conf.item_private_shortcut,
+        item_pin_shortcut: conf.item_pin_shortcut,
+        item_delete_shortcut: conf.item_delete_shortcut,
         ecdict_path: conf.ecdict_path,
         default_dir,
         effective_dir,
@@ -2112,6 +2147,18 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
     }
     if let Some(value) = config.word_translate_shortcut {
         merged.word_translate_shortcut = value;
+    }
+    if let Some(value) = config.item_tag_shortcut {
+        merged.item_tag_shortcut = value;
+    }
+    if let Some(value) = config.item_private_shortcut {
+        merged.item_private_shortcut = value;
+    }
+    if let Some(value) = config.item_pin_shortcut {
+        merged.item_pin_shortcut = value;
+    }
+    if let Some(value) = config.item_delete_shortcut {
+        merged.item_delete_shortcut = value;
     }
     if let Some(value) = config.ecdict_path {
         merged.ecdict_path = value;

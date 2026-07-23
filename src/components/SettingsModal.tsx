@@ -10,6 +10,10 @@ interface Props {
     quickPastePrefix: string;
     stackShortcutPrefix: string;
     wordTranslateShortcut: string;
+    itemTagShortcut: string;
+    itemPrivateShortcut: string;
+    itemPinShortcut: string;
+    itemDeleteShortcut: string;
     autoPaste: boolean;
     keepWindowOpen: boolean;
     alwaysOnTop: boolean;
@@ -254,6 +258,10 @@ export function SettingsModal({ onSaved }: Props) {
   const [quickPastePrefix, setQuickPastePrefix] = useState("CommandOrControl+Shift");
   const [stackShortcutPrefix, setStackShortcutPrefix] = useState("CommandOrControl+Alt");
   const [wordTranslateShortcut, setWordTranslateShortcut] = useState("Alt+C");
+  const [itemTagShortcut, setItemTagShortcut] = useState("T");
+  const [itemPrivateShortcut, setItemPrivateShortcut] = useState("M");
+  const [itemPinShortcut, setItemPinShortcut] = useState("P");
+  const [itemDeleteShortcut, setItemDeleteShortcut] = useState("Delete");
   const [ecdictPath, setEcdictPath] = useState("");
   const [effectiveDir, setEffectiveDir] = useState("");
   const [autoPaste, setAutoPaste] = useState(true);
@@ -307,6 +315,22 @@ export function SettingsModal({ onSaved }: Props) {
     () => normalizeShortcutValue(wordTranslateShortcut, "Alt+C"),
     [wordTranslateShortcut],
   );
+  const normalizedItemTagShortcut = useMemo(
+    () => normalizeShortcutValue(itemTagShortcut, "T"),
+    [itemTagShortcut],
+  );
+  const normalizedItemPrivateShortcut = useMemo(
+    () => normalizeShortcutValue(itemPrivateShortcut, "M"),
+    [itemPrivateShortcut],
+  );
+  const normalizedItemPinShortcut = useMemo(
+    () => normalizeShortcutValue(itemPinShortcut, "P"),
+    [itemPinShortcut],
+  );
+  const normalizedItemDeleteShortcut = useMemo(
+    () => normalizeShortcutValue(itemDeleteShortcut, "Delete"),
+    [itemDeleteShortcut],
+  );
 
   useEffect(() => {
     api
@@ -325,18 +349,30 @@ export function SettingsModal({ onSaved }: Props) {
         );
         const nextStackShortcutPrefix = normalizeShortcutValue(cfg.stackShortcutPrefix, "CommandOrControl+Alt");
         const nextWordTranslateShortcut = normalizeShortcutValue(cfg.wordTranslateShortcut, "Alt+C");
+        const nextItemTagShortcut = normalizeShortcutValue(cfg.itemTagShortcut, "T");
+        const nextItemPrivateShortcut = normalizeShortcutValue(cfg.itemPrivateShortcut, "M");
+        const nextItemPinShortcut = normalizeShortcutValue(cfg.itemPinShortcut, "P");
+        const nextItemDeleteShortcut = normalizeShortcutValue(cfg.itemDeleteShortcut, "Delete");
         setShortcut(canonicalizeShortcut(nextShortcut));
         setQueueStepShortcut(canonicalizeShortcut(nextQueueStepShortcut));
         setQuickPastePrefix(canonicalizeShortcut(nextQuickPastePrefix));
         setStackShortcutPrefix(canonicalizeShortcut(nextStackShortcutPrefix));
         setWordTranslateShortcut(canonicalizeShortcut(nextWordTranslateShortcut));
+        setItemTagShortcut(canonicalizeShortcut(nextItemTagShortcut));
+        setItemPrivateShortcut(canonicalizeShortcut(nextItemPrivateShortcut));
+        setItemPinShortcut(canonicalizeShortcut(nextItemPinShortcut));
+        setItemDeleteShortcut(canonicalizeShortcut(nextItemDeleteShortcut));
         setEcdictPath(cfg.ecdictPath || "");
         if (
           nextShortcut !== (cfg.shortcut ?? "") ||
           nextQueueStepShortcut !== (cfg.queueStepShortcut ?? "") ||
           nextQuickPastePrefix !== (cfg.quickPastePrefix ?? "") ||
           nextStackShortcutPrefix !== (cfg.stackShortcutPrefix ?? "") ||
-          nextWordTranslateShortcut !== (cfg.wordTranslateShortcut ?? "")
+          nextWordTranslateShortcut !== (cfg.wordTranslateShortcut ?? "") ||
+          nextItemTagShortcut !== (cfg.itemTagShortcut ?? "") ||
+          nextItemPrivateShortcut !== (cfg.itemPrivateShortcut ?? "") ||
+          nextItemPinShortcut !== (cfg.itemPinShortcut ?? "") ||
+          nextItemDeleteShortcut !== (cfg.itemDeleteShortcut ?? "")
         ) {
           void api.setConfig({
             shortcut: canonicalizeShortcut(nextShortcut),
@@ -344,6 +380,10 @@ export function SettingsModal({ onSaved }: Props) {
             quickPastePrefix: canonicalizeShortcut(nextQuickPastePrefix),
             stackShortcutPrefix: canonicalizeShortcut(nextStackShortcutPrefix),
             wordTranslateShortcut: canonicalizeShortcut(nextWordTranslateShortcut),
+            itemTagShortcut: canonicalizeShortcut(nextItemTagShortcut),
+            itemPrivateShortcut: canonicalizeShortcut(nextItemPrivateShortcut),
+            itemPinShortcut: canonicalizeShortcut(nextItemPinShortcut),
+            itemDeleteShortcut: canonicalizeShortcut(nextItemDeleteShortcut),
           }).catch(console.error);
         }
         setEffectiveDir(cfg.effectiveDir || "");
@@ -384,6 +424,10 @@ export function SettingsModal({ onSaved }: Props) {
         quickPastePrefix: normalizedQuickPastePrefix,
         stackShortcutPrefix: normalizedStackShortcutPrefix,
         wordTranslateShortcut: normalizedWordTranslateShortcut,
+        itemTagShortcut: normalizedItemTagShortcut,
+        itemPrivateShortcut: normalizedItemPrivateShortcut,
+        itemPinShortcut: normalizedItemPinShortcut,
+        itemDeleteShortcut: normalizedItemDeleteShortcut,
         ecdictPath,
         autoPaste,
         keepWindowOpen: false,
@@ -403,6 +447,10 @@ export function SettingsModal({ onSaved }: Props) {
         quickPastePrefix: normalizedQuickPastePrefix,
         stackShortcutPrefix: normalizedStackShortcutPrefix,
         wordTranslateShortcut: normalizedWordTranslateShortcut,
+        itemTagShortcut: normalizedItemTagShortcut,
+        itemPrivateShortcut: normalizedItemPrivateShortcut,
+        itemPinShortcut: normalizedItemPinShortcut,
+        itemDeleteShortcut: normalizedItemDeleteShortcut,
         autoPaste,
         keepWindowOpen: false,
         alwaysOnTop,
@@ -588,6 +636,38 @@ export function SettingsModal({ onSaved }: Props) {
             onChange={setWordTranslateShortcut}
             checkAvailability={api.probeShortcutAvailable}
             help="Copy the selected word or short phrase, then look it up through ECDICT."
+          />
+
+          <ShortcutRecorder
+            label="Selected item tag"
+            value={itemTagShortcut}
+            defaultValue="T"
+            onChange={setItemTagShortcut}
+            help="When the window is pinned on top, open the quick tag picker for the selected item."
+          />
+
+          <ShortcutRecorder
+            label="Selected item private"
+            value={itemPrivateShortcut}
+            defaultValue="M"
+            onChange={setItemPrivateShortcut}
+            help="When the window is pinned on top, mark the selected item as private."
+          />
+
+          <ShortcutRecorder
+            label="Selected item pin"
+            value={itemPinShortcut}
+            defaultValue="P"
+            onChange={setItemPinShortcut}
+            help="When the window is pinned on top, pin or unpin the selected item."
+          />
+
+          <ShortcutRecorder
+            label="Selected item delete"
+            value={itemDeleteShortcut}
+            defaultValue="Delete"
+            onChange={setItemDeleteShortcut}
+            help="When the window is pinned on top, delete the selected item."
           />
 
           <label className="easycp-field">

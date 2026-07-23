@@ -88,6 +88,10 @@ export const api = {
       quickPastePrefix?: string;
       stackShortcutPrefix?: string;
       wordTranslateShortcut?: string;
+      itemTagShortcut?: string;
+      itemPrivateShortcut?: string;
+      itemPinShortcut?: string;
+      itemDeleteShortcut?: string;
       ecdictPath?: string;
       defaultDir: string;
       effectiveDir: string;
@@ -115,6 +119,10 @@ export const api = {
     quickPastePrefix?: string;
     stackShortcutPrefix?: string;
     wordTranslateShortcut?: string;
+    itemTagShortcut?: string;
+    itemPrivateShortcut?: string;
+    itemPinShortcut?: string;
+    itemDeleteShortcut?: string;
     ecdictPath?: string;
     autoPaste?: boolean;
     keepWindowOpen?: boolean;
