@@ -44,7 +44,7 @@ import type { HistoryItem, ManagedTag } from "./types";
 
 const DEFAULT_SHORTCUT = "CommandOrControl+Shift+V";
 const DEFAULT_QUEUE_STEP_SHORTCUT = "CommandOrControl+Alt+V";
-const DEFAULT_QUICK_PASTE_PREFIX = "Super+Shift";
+const DEFAULT_QUICK_PASTE_PREFIX = "CommandOrControl+Shift";
 const DEFAULT_STACK_SHORTCUT_PREFIX = "CommandOrControl+Alt";
 const DEFAULT_WORD_TRANSLATE_SHORTCUT = "Alt+C";
 const DEFAULT_TAG_COLOR = "#0f6cbd";
@@ -109,6 +109,10 @@ function normalizeShortcutValue(value: string | null | undefined, fallback: stri
   return trimmed || fallback;
 }
 
+function migrateQuickPastePrefix(value: string) {
+  return value === "Super+Shift" ? DEFAULT_QUICK_PASTE_PREFIX : value;
+}
+
 function MainApp() {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const suppressBlurHideUntilRef = useRef(0);
@@ -158,9 +162,8 @@ function MainApp() {
           cfg.queueStepShortcut,
           DEFAULT_QUEUE_STEP_SHORTCUT,
         );
-        const nextQuickPastePrefix = normalizeShortcutValue(
-          cfg.quickPastePrefix,
-          DEFAULT_QUICK_PASTE_PREFIX,
+        const nextQuickPastePrefix = migrateQuickPastePrefix(
+          normalizeShortcutValue(cfg.quickPastePrefix, DEFAULT_QUICK_PASTE_PREFIX),
         );
         const nextStackShortcutPrefix = normalizeShortcutValue(
           cfg.stackShortcutPrefix,

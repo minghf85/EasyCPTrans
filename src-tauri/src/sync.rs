@@ -38,7 +38,7 @@ fn parse_config(app: &AppHandle) -> Result<AppConfig, String> {
                 shortcut: "CommandOrControl+Shift+V".to_string(),
                 plain_paste_shortcut: "Super+Alt+V".to_string(),
                 queue_step_shortcut: "CommandOrControl+Alt+V".to_string(),
-                quick_paste_prefix: "Super+Shift".to_string(),
+                quick_paste_prefix: "CommandOrControl+Shift".to_string(),
                 stack_shortcut_prefix: "CommandOrControl+Alt".to_string(),
                 word_translate_shortcut: "Alt+C".to_string(),
                 ecdict_path: "".to_string(),

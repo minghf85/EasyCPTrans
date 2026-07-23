@@ -16,7 +16,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, S
 
 const DEFAULT_PANEL_SHORTCUT: &str = "CommandOrControl+Shift+V";
 const DEFAULT_QUEUE_STEP_SHORTCUT: &str = "CommandOrControl+Alt+V";
-const DEFAULT_QUICK_PASTE_PREFIX: &str = "Super+Shift";
+const DEFAULT_QUICK_PASTE_PREFIX: &str = "CommandOrControl+Shift";
 const DEFAULT_STACK_SHORTCUT_PREFIX: &str = "CommandOrControl+Alt";
 const DEFAULT_WORD_TRANSLATE_SHORTCUT: &str = "Alt+C";
 const LEGACY_PANEL_SHORTCUT: &str = "Super+Shift+V";
@@ -176,9 +176,13 @@ fn build_shortcut_bindings(config: &AppConfig) -> Vec<(String, ShortcutAction)> 
 
     if !quick_prefix.is_empty() {
         for index in 0..10 {
-            let function_key = index + 1;
+            let number_key = if index == 9 {
+                "0".to_string()
+            } else {
+                (index + 1).to_string()
+            };
             entries.push((
-                format!("{quick_prefix}+F{function_key}"),
+                format!("{quick_prefix}+{number_key}"),
                 ShortcutAction::QuickPaste { index },
             ));
         }
@@ -212,6 +216,46 @@ fn should_emit_shortcut(shortcut: &str) -> bool {
     }
     guard.insert(shortcut.to_string(), now);
     true
+}
+
+#[cfg(target_os = "windows")]
+fn is_shortcut_modifier_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN,
+        VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+    };
+
+    let is_down =
+        |key: VIRTUAL_KEY| unsafe { (GetAsyncKeyState(key.0 as i32) as u16 & 0x8000) != 0 };
+    [
+        VK_CONTROL,
+        VK_LCONTROL,
+        VK_RCONTROL,
+        VK_SHIFT,
+        VK_LSHIFT,
+        VK_RSHIFT,
+        VK_MENU,
+        VK_LMENU,
+        VK_RMENU,
+        VK_LWIN,
+        VK_RWIN,
+    ]
+    .into_iter()
+    .any(is_down)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_shortcut_modifier_down() -> bool {
+    false
+}
+
+fn wait_for_shortcut_release() {
+    for _ in 0..20 {
+        if !is_shortcut_modifier_down() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -419,7 +463,8 @@ async fn execute_recent_paste<R: Runtime>(app: AppHandle<R>, index: usize) -> Re
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
-    std::thread::sleep(Duration::from_millis(160));
+    wait_for_shortcut_release();
+    std::thread::sleep(Duration::from_millis(80));
     crate::simulate_paste_impl();
     println!(
         "[EasyCPTrans] Quick paste simulated Ctrl+V for item {}",
@@ -474,7 +519,8 @@ async fn execute_queue_step<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
             QueueUpdatedEvent { ids: remaining_ids },
         );
     }
-    std::thread::sleep(Duration::from_millis(160));
+    wait_for_shortcut_release();
+    std::thread::sleep(Duration::from_millis(80));
     crate::simulate_paste_impl();
     println!(
         "[EasyCPTrans] Queue step simulated Ctrl+V for item {}",
@@ -637,6 +683,9 @@ pub fn register_shortcuts<R: Runtime>(
     let manager = app.global_shortcut();
     let _ = manager.unregister_all();
     if let Ok(mut guard) = SHORTCUT_ACTIONS.lock() {
+        guard.clear();
+    }
+    if let Ok(mut guard) = LAST_SHORTCUT_FIRE.lock() {
         guard.clear();
     }
 

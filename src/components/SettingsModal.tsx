@@ -27,6 +27,12 @@ function normalizeShortcutValue(value: string | null | undefined, fallback: stri
   return trimmed || fallback;
 }
 
+function migrateQuickPastePrefix(value: string) {
+  return canonicalizeShortcut(value) === "Super+Shift"
+    ? "CommandOrControl+Shift"
+    : value;
+}
+
 function normalizeKeyboardKey(key: string) {
   if (key === " ") return "Space";
   if (key === "Escape") return "Esc";
@@ -245,7 +251,7 @@ export function SettingsModal({ onSaved }: Props) {
   const [cachePath, setCachePath] = useState("");
   const [shortcut, setShortcut] = useState("CommandOrControl+Shift+V");
   const [queueStepShortcut, setQueueStepShortcut] = useState("CommandOrControl+Alt+V");
-  const [quickPastePrefix, setQuickPastePrefix] = useState("Super+Shift");
+  const [quickPastePrefix, setQuickPastePrefix] = useState("CommandOrControl+Shift");
   const [stackShortcutPrefix, setStackShortcutPrefix] = useState("CommandOrControl+Alt");
   const [wordTranslateShortcut, setWordTranslateShortcut] = useState("Alt+C");
   const [ecdictPath, setEcdictPath] = useState("");
@@ -290,7 +296,7 @@ export function SettingsModal({ onSaved }: Props) {
     [queueStepShortcut],
   );
   const normalizedQuickPastePrefix = useMemo(
-    () => normalizeShortcutValue(quickPastePrefix, "Super+Shift"),
+    () => normalizeShortcutValue(quickPastePrefix, "CommandOrControl+Shift"),
     [quickPastePrefix],
   );
   const normalizedStackShortcutPrefix = useMemo(
@@ -314,7 +320,9 @@ export function SettingsModal({ onSaved }: Props) {
             ? "CommandOrControl+Shift+V"
             : nextShortcutRaw;
         const nextQueueStepShortcut = normalizeShortcutValue(cfg.queueStepShortcut, "CommandOrControl+Alt+V");
-        const nextQuickPastePrefix = normalizeShortcutValue(cfg.quickPastePrefix, "Super+Shift");
+        const nextQuickPastePrefix = migrateQuickPastePrefix(
+          normalizeShortcutValue(cfg.quickPastePrefix, "CommandOrControl+Shift"),
+        );
         const nextStackShortcutPrefix = normalizeShortcutValue(cfg.stackShortcutPrefix, "CommandOrControl+Alt");
         const nextWordTranslateShortcut = normalizeShortcutValue(cfg.wordTranslateShortcut, "Alt+C");
         setShortcut(canonicalizeShortcut(nextShortcut));
@@ -558,9 +566,9 @@ export function SettingsModal({ onSaved }: Props) {
           <ShortcutRecorder
             label="Quick paste prefix"
             value={quickPastePrefix}
-            defaultValue="Super+Shift"
+            defaultValue="CommandOrControl+Shift"
             onChange={setQuickPastePrefix}
-            help="This modifier prefix combines with F1-F10 for quick paste."
+            help="This modifier prefix combines with 1-9 and 0 for quick paste slots 1-10."
             allowModifierOnly
           />
 

@@ -185,14 +185,25 @@ where
     Ok(normalize_managed_tags(raw))
 }
 
+fn normalize_app_config(mut config: AppConfig) -> AppConfig {
+    if config
+        .quick_paste_prefix
+        .trim()
+        .eq_ignore_ascii_case("Super+Shift")
+    {
+        config.quick_paste_prefix = default_quick_paste_prefix();
+    }
+    config
+}
+
 pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfig {
     let conf_path = app.path().app_data_dir().unwrap().join("config.json");
     if let Ok(data) = std::fs::read_to_string(&conf_path) {
         if let Ok(conf) = serde_json::from_str::<AppConfig>(&data) {
-            return conf;
+            return normalize_app_config(conf);
         }
     }
-    AppConfig {
+    normalize_app_config(AppConfig {
         cache_path: "".to_string(),
         shortcut: "CommandOrControl+Shift+V".to_string(),
         plain_paste_shortcut: default_plain_paste_shortcut(),
@@ -216,7 +227,7 @@ pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfi
         window_height: None,
         window_x: None,
         window_y: None,
-    }
+    })
 }
 
 async fn emit_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
@@ -1922,7 +1933,7 @@ fn default_queue_step_shortcut() -> String {
     "CommandOrControl+Alt+V".to_string()
 }
 fn default_quick_paste_prefix() -> String {
-    "Super+Shift".to_string()
+    "CommandOrControl+Shift".to_string()
 }
 fn default_stack_shortcut_prefix() -> String {
     "CommandOrControl+Alt".to_string()
