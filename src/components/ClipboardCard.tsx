@@ -69,11 +69,11 @@ function renderTranslationRichText(content: string) {
   const flushList = () => {
     if (listItems.length === 0) return;
     nodes.push(
-      <ul key={`list-${nodes.length}`} className="easycp-translation-list">
+      <div key={`list-${nodes.length}`} className="easycp-translation-list">
         {listItems.map((line, index) => (
-          <li key={`${line}-${index}`}>{line}</li>
+          <div key={`${line}-${index}`} className="easycp-translation-list-line">{line}</div>
         ))}
-      </ul>,
+      </div>,
     );
     listItems = [];
   };

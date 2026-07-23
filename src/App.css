@@ -724,11 +724,10 @@
   flex-direction: column;
   gap: 4px;
   margin: 4px 0 0;
-  padding-left: 16px;
 }
 
-.easycp-translation-list li {
-  padding-left: 2px;
+.easycp-translation-list-line {
+  line-height: 1.55;
 }
 
 .easycp-translation-divider {
