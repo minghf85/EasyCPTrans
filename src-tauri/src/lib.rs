@@ -34,6 +34,24 @@ pub(crate) fn simulate_paste_impl() {
     }
 }
 
+pub(crate) fn simulate_copy_impl() {
+    let mut enigo = Enigo::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        enigo.key_down(Key::Meta);
+        enigo.key_click(Key::Layout('c'));
+        enigo.key_up(Key::Meta);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        enigo.key_down(Key::Control);
+        enigo.key_click(Key::Layout('c'));
+        enigo.key_up(Key::Control);
+    }
+}
+
 #[tauri::command]
 fn simulate_paste() {
     simulate_paste_impl();
@@ -403,6 +421,8 @@ pub fn run() {
             commands::mark_used,
             commands::update_text_item,
             commands::create_stack_text_item,
+            commands::translate_selected_text,
+            commands::convert_ecdict_csv_to_sqlite,
             commands::save_temp_image,
             commands::read_image_as_data_url,
             commands::get_config,

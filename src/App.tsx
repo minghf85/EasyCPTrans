@@ -46,6 +46,7 @@ const DEFAULT_SHORTCUT = "CommandOrControl+Shift+V";
 const DEFAULT_QUEUE_STEP_SHORTCUT = "CommandOrControl+Alt+V";
 const DEFAULT_QUICK_PASTE_PREFIX = "Super+Shift";
 const DEFAULT_STACK_SHORTCUT_PREFIX = "CommandOrControl+Alt";
+const DEFAULT_WORD_TRANSLATE_SHORTCUT = "Alt+C";
 const DEFAULT_TAG_COLOR = "#0f6cbd";
 const SYSTEM_TAGS: Array<ManagedTag & { key: ActiveView }> = [
   { id: "sys-text", name: "Text", common: true, color: "#0078d4", system: true, key: "text" },
@@ -165,17 +166,23 @@ function MainApp() {
           cfg.stackShortcutPrefix,
           DEFAULT_STACK_SHORTCUT_PREFIX,
         );
+        const nextWordTranslateShortcut = normalizeShortcutValue(
+          cfg.wordTranslateShortcut,
+          DEFAULT_WORD_TRANSLATE_SHORTCUT,
+        );
         if (
           nextShortcut !== (cfg.shortcut ?? "") ||
           nextQueueStepShortcut !== (cfg.queueStepShortcut ?? "") ||
           nextQuickPastePrefix !== (cfg.quickPastePrefix ?? "") ||
-          nextStackShortcutPrefix !== (cfg.stackShortcutPrefix ?? "")
+          nextStackShortcutPrefix !== (cfg.stackShortcutPrefix ?? "") ||
+          nextWordTranslateShortcut !== (cfg.wordTranslateShortcut ?? "")
         ) {
           void api.setConfig({
             shortcut: nextShortcut,
             queueStepShortcut: nextQueueStepShortcut,
             quickPastePrefix: nextQuickPastePrefix,
             stackShortcutPrefix: nextStackShortcutPrefix,
+            wordTranslateShortcut: nextWordTranslateShortcut,
           }).catch(console.error);
         }
         if (typeof cfg.autoPaste === "boolean") setAutoPaste(cfg.autoPaste);
@@ -692,6 +699,7 @@ function MainApp() {
     queueStepShortcut: string;
     quickPastePrefix: string;
     stackShortcutPrefix: string;
+    wordTranslateShortcut: string;
     autoPaste: boolean;
     keepWindowOpen: boolean;
     alwaysOnTop: boolean;

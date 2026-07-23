@@ -8,13 +8,17 @@ use base64::Engine;
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::Row;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-const PRIVACY_TAG: &str = "隐私";
+const PRIVACY_TAG: &str = "private";
+static ECDICT_CSV_CACHE: once_cell::sync::Lazy<
+    std::sync::Mutex<HashMap<PathBuf, HashMap<String, DictionaryEntry>>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 fn is_privacy_tag(tag: &str) -> bool {
     let normalized = tag.trim().to_lowercase();
-    normalized == "隐私" || normalized == "privacy" || normalized == "private"
+    normalized == "privacy" || normalized == "private"
 }
 
 fn remove_privacy_tags(tags: Vec<String>) -> Vec<String> {
@@ -181,7 +185,7 @@ where
     Ok(normalize_managed_tags(raw))
 }
 
-pub(crate) fn read_app_config(app: &AppHandle) -> AppConfig {
+pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfig {
     let conf_path = app.path().app_data_dir().unwrap().join("config.json");
     if let Ok(data) = std::fs::read_to_string(&conf_path) {
         if let Ok(conf) = serde_json::from_str::<AppConfig>(&data) {
@@ -195,6 +199,8 @@ pub(crate) fn read_app_config(app: &AppHandle) -> AppConfig {
         queue_step_shortcut: default_queue_step_shortcut(),
         quick_paste_prefix: default_quick_paste_prefix(),
         stack_shortcut_prefix: default_stack_shortcut_prefix(),
+        word_translate_shortcut: default_word_translate_shortcut(),
+        ecdict_path: String::new(),
         auto_paste: true,
         keep_window_open: false,
         always_on_top: false,
@@ -213,8 +219,608 @@ pub(crate) fn read_app_config(app: &AppHandle) -> AppConfig {
     }
 }
 
-async fn emit_changed(app: &AppHandle) {
+async fn emit_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("clipboard-changed", ());
+}
+
+fn normalize_word_query(value: &str) -> Option<String> {
+    let normalized = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string();
+    if normalized.is_empty() || normalized.len() > 80 || normalized.lines().count() > 1 {
+        return None;
+    }
+    if !normalized
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '-' | '\'' | '.'))
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn log_text_preview(value: &str) -> String {
+    let normalized = value.replace('\r', "\\r").replace('\n', "\\n");
+    let mut preview = normalized.chars().take(120).collect::<String>();
+    if normalized.chars().count() > 120 {
+        preview.push_str("...");
+    }
+    format!("len={}, preview=\"{}\"", value.len(), preview)
+}
+
+fn strip_word(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+fn default_ecdict_candidates<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    configured: &str,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let configured = configured.trim();
+    if !configured.is_empty() {
+        candidates.push(PathBuf::from(configured));
+    }
+    if let Ok(app_data) = app.path().app_data_dir() {
+        candidates.push(app_data.join("dictionaries").join("ecdict.sqlite"));
+        candidates.push(app_data.join("dictionaries").join("ecdict.db"));
+        candidates.push(app_data.join("dictionaries").join("stardict.sqlite"));
+        candidates.push(app_data.join("dictionaries").join("stardict.db"));
+        candidates.push(app_data.join("dictionaries").join("stardict.db"));
+        candidates.push(app_data.join("dictionaries").join("ecdict.csv"));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("ECDICT").join("ecdict.db"));
+        candidates.push(cwd.join("ECDICT").join("stardict").join("stardict.db"));
+        candidates.push(cwd.join("ECDICT").join("stardict.db"));
+        candidates.push(cwd.join("ECDICT").join("ecdict.csv"));
+    }
+    candidates
+}
+
+fn split_csv_line(line: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '"' {
+            if in_quotes && chars.peek() == Some(&'"') {
+                current.push('"');
+                let _ = chars.next();
+            } else {
+                in_quotes = !in_quotes;
+            }
+        } else if ch == ',' && !in_quotes {
+            result.push(current);
+            current = String::new();
+        } else {
+            current.push(ch);
+        }
+    }
+    result.push(current);
+    result
+}
+
+#[derive(Debug, Clone)]
+struct DictionaryEntry {
+    word: String,
+    phonetic: String,
+    definition: String,
+    translation: String,
+    pos: String,
+    collins: i64,
+    oxford: i64,
+    tags: String,
+    bnc: i64,
+    frq: i64,
+    exchange: String,
+    detail: String,
+    audio: String,
+}
+
+impl DictionaryEntry {
+    fn formatted(&self, query: &str) -> String {
+        let mut parts = vec![format!("# {}", self.word)];
+        if !self.phonetic.trim().is_empty() {
+            parts.push(format!("\n🔊 /{}/", self.phonetic.trim()));
+        }
+
+        let mut badges = Vec::new();
+        if self.collins > 0 {
+            badges.push(format!("Collins {}★", self.collins));
+        }
+        if self.oxford > 0 {
+            badges.push("Oxford 3000".to_string());
+        }
+        let normalized_tags = format_tags(&self.tags);
+        if !normalized_tags.is_empty() {
+            badges.push(normalized_tags);
+        }
+        if !badges.is_empty() {
+            parts.push(format!("\n🏷 {}", badges.join(" · ")));
+        }
+
+        if !self.translation.trim().is_empty() {
+            parts.push(format!(
+                "\n## 中文释义\n{}",
+                format_multiline_list(self.translation.trim())
+            ));
+        }
+        if !self.definition.trim().is_empty() {
+            parts.push(format!(
+                "\n## English Definition\n{}",
+                format_multiline_list(self.definition.trim())
+            ));
+        }
+
+        if !self.pos.trim().is_empty() {
+            parts.push(format!("\n## 词性分布\n{}", format_pos(&self.pos)));
+        }
+
+        let exchange = format_exchange(&self.exchange);
+        if !exchange.is_empty() {
+            parts.push(format!("\n## 词形变化\n{}", exchange));
+        }
+
+        let mut corpus = Vec::new();
+        if self.bnc > 0 {
+            corpus.push(format!("BNC rank: {}", self.bnc));
+        }
+        if self.frq > 0 {
+            corpus.push(format!("COCA/FRQ rank: {}", self.frq));
+        }
+        if !corpus.is_empty() {
+            parts.push(format!("\n## 语料词频\n{}", corpus.join("\n")));
+        }
+
+        if !self.detail.trim().is_empty() {
+            parts.push(format!("\n## 扩展信息\n{}", self.detail.trim()));
+        }
+        if !self.audio.trim().is_empty() {
+            parts.push(format!("\n## 音频\n{}", self.audio.trim()));
+        }
+
+        if self.pos.trim().is_empty()
+            && self.tags.trim().is_empty()
+            && self.exchange.trim().is_empty()
+            && self.bnc <= 0
+            && self.frq <= 0
+        {
+            let mut meta = Vec::new();
+            meta.push("No extra ECDICT metadata available.".to_string());
+            parts.push(format!("\n[meta]\n{}", meta.join("\n")));
+        }
+
+        parts.push(format!("\n---\nsource: ECDICT\nquery: {}", query));
+        parts.join("\n")
+    }
+}
+
+fn format_multiline_list(value: &str) -> String {
+    value
+        .replace("\\n", "\n")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| format!("- {}", line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_tags(value: &str) -> String {
+    value
+        .split_whitespace()
+        .map(|tag| match tag {
+            "zk" => "中考",
+            "gk" => "高考",
+            "cet4" => "CET-4",
+            "cet6" => "CET-6",
+            "ky" => "考研",
+            "toefl" => "TOEFL",
+            "ielts" => "IELTS",
+            "gre" => "GRE",
+            "tem4" => "TEM-4",
+            "tem8" => "TEM-8",
+            "sat" => "SAT",
+            "bec" => "BEC",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn format_pos(value: &str) -> String {
+    value
+        .split('/')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut pieces = part.splitn(2, ':');
+            let key = pieces.next().unwrap_or_default();
+            let ratio = pieces.next().unwrap_or_default();
+            let label = match key {
+                "n" => "noun",
+                "v" => "verb",
+                "a" | "j" => "adjective",
+                "r" => "adverb",
+                "i" => "preposition",
+                "c" => "conjunction",
+                "u" => "interjection",
+                "m" => "numeral",
+                "q" => "quantifier",
+                "p" => "pronoun",
+                "d" => "determiner",
+                other => other,
+            };
+            if ratio.is_empty() {
+                format!("- {}", label)
+            } else {
+                format!("- {}: {}%", label, ratio)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_exchange(value: &str) -> String {
+    value
+        .split('/')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| {
+            let mut pieces = part.splitn(2, ':');
+            let key = pieces.next()?.trim();
+            let word = pieces.next()?.trim();
+            if word.is_empty() {
+                return None;
+            }
+            let label = match key {
+                "p" => "past tense",
+                "d" => "past participle",
+                "i" => "present participle",
+                "3" => "third-person singular",
+                "r" => "comparative",
+                "t" => "superlative",
+                "s" => "plural",
+                "0" => "lemma",
+                "1" => "lemma variant",
+                other => other,
+            };
+            Some(format!("- {}: {}", label, word))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn dictionary_entry_from_columns(columns: &[String]) -> Option<DictionaryEntry> {
+    Some(DictionaryEntry {
+        word: columns.first()?.trim().to_string(),
+        phonetic: columns.get(1).cloned().unwrap_or_default(),
+        definition: columns.get(2).cloned().unwrap_or_default(),
+        translation: columns.get(3).cloned().unwrap_or_default(),
+        pos: columns.get(4).cloned().unwrap_or_default(),
+        collins: csv_field(columns, 5).parse::<i64>().unwrap_or(0),
+        oxford: csv_field(columns, 6).parse::<i64>().unwrap_or(0),
+        tags: columns.get(7).cloned().unwrap_or_default(),
+        bnc: csv_field(columns, 8).parse::<i64>().unwrap_or(0),
+        frq: csv_field(columns, 9).parse::<i64>().unwrap_or(0),
+        exchange: columns.get(10).cloned().unwrap_or_default(),
+        detail: columns.get(11).cloned().unwrap_or_default(),
+        audio: columns.get(12).cloned().unwrap_or_default(),
+    })
+}
+
+async fn lookup_ecdict_sqlite(path: &Path, query: &str) -> Result<Option<DictionaryEntry>, String> {
+    println!(
+        "[EasyCPTrans] ECDICT sqlite lookup start: path={}, query={}",
+        path.display(),
+        query
+    );
+    let started = std::time::Instant::now();
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .map_err(|err| err.to_string())?;
+    let normalized = query.to_ascii_lowercase();
+    let stripped = strip_word(query);
+    let row = sqlx::query(
+        "SELECT word, phonetic, definition, translation, pos, collins, oxford, tag, bnc, frq, exchange, detail, audio
+         FROM stardict
+         WHERE lower(word) = ?1 OR sw = ?2
+         ORDER BY CASE WHEN lower(word) = ?1 THEN 0 ELSE 1 END
+         LIMIT 1",
+    )
+    .bind(&normalized)
+    .bind(&stripped)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|err| err.to_string())?;
+
+    let entry = row.map(|row| DictionaryEntry {
+        word: row.try_get("word").unwrap_or_default(),
+        phonetic: row.try_get("phonetic").unwrap_or_default(),
+        definition: row.try_get("definition").unwrap_or_default(),
+        translation: row.try_get("translation").unwrap_or_default(),
+        pos: row.try_get("pos").unwrap_or_default(),
+        collins: row.try_get("collins").unwrap_or_default(),
+        oxford: row.try_get("oxford").unwrap_or_default(),
+        tags: row.try_get("tag").unwrap_or_default(),
+        bnc: row.try_get("bnc").unwrap_or_default(),
+        frq: row.try_get("frq").unwrap_or_default(),
+        exchange: row.try_get("exchange").unwrap_or_default(),
+        detail: row.try_get("detail").unwrap_or_default(),
+        audio: row.try_get("audio").unwrap_or_default(),
+    });
+    println!(
+        "[EasyCPTrans] ECDICT sqlite lookup finish: path={}, query={}, hit={}, elapsed_ms={}",
+        path.display(),
+        query,
+        entry
+            .as_ref()
+            .map(|entry| entry.word.as_str())
+            .unwrap_or("<none>"),
+        started.elapsed().as_millis()
+    );
+    Ok(entry)
+}
+
+fn lookup_ecdict_csv(path: &Path, query: &str) -> Result<Option<DictionaryEntry>, String> {
+    println!(
+        "[EasyCPTrans] ECDICT csv lookup start: path={}, query={}",
+        path.display(),
+        query
+    );
+    let started = std::time::Instant::now();
+    if let Ok(mut cache) = ECDICT_CSV_CACHE.lock() {
+        if !cache.contains_key(path) {
+            println!(
+                "[EasyCPTrans] ECDICT csv cache loading: path={}",
+                path.display()
+            );
+            let data = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
+            let mut entries = HashMap::new();
+            for (index, line) in data.lines().enumerate() {
+                if index == 0 {
+                    continue;
+                }
+                let columns = split_csv_line(line);
+                let Some(entry) = dictionary_entry_from_columns(&columns) else {
+                    continue;
+                };
+                entries.insert(entry.word.to_ascii_lowercase(), entry.clone());
+                entries.entry(strip_word(&entry.word)).or_insert(entry);
+            }
+            cache.insert(path.to_path_buf(), entries);
+        }
+        if let Some(entries) = cache.get(path) {
+            let normalized = query.trim().to_ascii_lowercase();
+            let stripped = strip_word(query);
+            let entry = entries
+                .get(&normalized)
+                .or_else(|| entries.get(&stripped))
+                .cloned();
+            println!(
+                "[EasyCPTrans] ECDICT csv lookup finish: path={}, query={}, hit={}, elapsed_ms={}",
+                path.display(),
+                query,
+                entry
+                    .as_ref()
+                    .map(|entry| entry.word.as_str())
+                    .unwrap_or("<none>"),
+                started.elapsed().as_millis()
+            );
+            return Ok(entry);
+        }
+    }
+
+    let data = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
+    let normalized = query.trim().to_ascii_lowercase();
+    let stripped = strip_word(query);
+    let mut stripped_match = None;
+    for (index, line) in data.lines().enumerate() {
+        if index == 0 {
+            continue;
+        }
+        let columns = split_csv_line(line);
+        let Some(entry) = dictionary_entry_from_columns(&columns) else {
+            continue;
+        };
+        let word = entry.word.to_ascii_lowercase();
+        if word == normalized {
+            println!(
+                "[EasyCPTrans] ECDICT csv lookup finish: path={}, query={}, hit={}, elapsed_ms={}",
+                path.display(),
+                query,
+                entry.word,
+                started.elapsed().as_millis()
+            );
+            return Ok(Some(entry));
+        }
+        if stripped_match.is_none() && strip_word(&entry.word) == stripped {
+            stripped_match = Some(entry);
+        }
+    }
+    println!(
+        "[EasyCPTrans] ECDICT csv lookup finish: path={}, query={}, hit={}, elapsed_ms={}",
+        path.display(),
+        query,
+        stripped_match
+            .as_ref()
+            .map(|entry| entry.word.as_str())
+            .unwrap_or("<none>"),
+        started.elapsed().as_millis()
+    );
+    Ok(stripped_match)
+}
+
+fn csv_field<'a>(columns: &'a [String], index: usize) -> &'a str {
+    columns.get(index).map(|value| value.as_str()).unwrap_or("")
+}
+
+#[tauri::command]
+pub async fn convert_ecdict_csv_to_sqlite(
+    csv_path: String,
+    db_path: String,
+) -> Result<u64, String> {
+    let csv_path = PathBuf::from(csv_path);
+    let db_path = PathBuf::from(db_path);
+    if !csv_path.exists() {
+        return Err(format!("CSV not found: {}", csv_path.display()));
+    }
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&db_path)
+        .create_if_missing(true);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS stardict (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            word TEXT NOT NULL,
+            sw TEXT,
+            phonetic TEXT,
+            definition TEXT,
+            translation TEXT,
+            pos TEXT,
+            collins INTEGER DEFAULT 0,
+            oxford INTEGER DEFAULT 0,
+            tag TEXT,
+            bnc INTEGER DEFAULT 0,
+            frq INTEGER DEFAULT 0,
+            exchange TEXT,
+            detail TEXT,
+            audio TEXT
+        )",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|err| err.to_string())?;
+    sqlx::query("DELETE FROM stardict")
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let mut tx = pool.begin().await.map_err(|err| err.to_string())?;
+    let mut count = 0_u64;
+    let reader =
+        std::io::BufReader::new(std::fs::File::open(&csv_path).map_err(|err| err.to_string())?);
+    for (index, line) in std::io::BufRead::lines(reader).enumerate() {
+        let line = line.map_err(|err| err.to_string())?;
+        if index == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let columns = split_csv_line(&line);
+        let word = csv_field(&columns, 0).trim();
+        if word.is_empty() {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO stardict
+                (word, sw, phonetic, definition, translation, pos, collins, oxford, tag, bnc, frq, exchange, detail, audio)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        )
+        .bind(word)
+        .bind(strip_word(word))
+        .bind(csv_field(&columns, 1))
+        .bind(csv_field(&columns, 2))
+        .bind(csv_field(&columns, 3))
+        .bind(csv_field(&columns, 4))
+        .bind(csv_field(&columns, 5).parse::<i64>().unwrap_or(0))
+        .bind(csv_field(&columns, 6).parse::<i64>().unwrap_or(0))
+        .bind(csv_field(&columns, 7))
+        .bind(csv_field(&columns, 8).parse::<i64>().unwrap_or(0))
+        .bind(csv_field(&columns, 9).parse::<i64>().unwrap_or(0))
+        .bind(csv_field(&columns, 10))
+        .bind(csv_field(&columns, 11))
+        .bind(csv_field(&columns, 12))
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| err.to_string())?;
+        count += 1;
+    }
+    tx.commit().await.map_err(|err| err.to_string())?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_stardict_word ON stardict(word)")
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_stardict_sw ON stardict(sw)")
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(count)
+}
+
+async fn lookup_ecdict<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    query: &str,
+) -> Result<Option<DictionaryEntry>, String> {
+    let config = read_app_config(app);
+    println!(
+        "[EasyCPTrans] ECDICT lookup config: configured_path=\"{}\"",
+        config.ecdict_path
+    );
+    let mut last_error = None;
+    let candidates = default_ecdict_candidates(app, &config.ecdict_path);
+    for path in candidates {
+        println!(
+            "[EasyCPTrans] ECDICT candidate: path={}, exists={}",
+            path.display(),
+            path.exists()
+        );
+        if !path.exists() {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let result = if ext == "csv" {
+            lookup_ecdict_csv(&path, query)
+        } else {
+            lookup_ecdict_sqlite(&path, query).await
+        };
+        match result {
+            Ok(Some(entry)) => return Ok(Some(entry)),
+            Ok(None) => {
+                println!(
+                    "[EasyCPTrans] ECDICT candidate miss: path={}, query={}",
+                    path.display(),
+                    query
+                );
+            }
+            Err(err) => {
+                println!(
+                    "[EasyCPTrans] ECDICT candidate error: path={}, error={}",
+                    path.display(),
+                    err
+                );
+                last_error = Some(format!("{}: {}", path.display(), err));
+            }
+        }
+    }
+    if let Some(err) = last_error {
+        return Err(err);
+    }
+    Ok(None)
 }
 
 #[derive(Debug, Deserialize)]
@@ -399,8 +1005,8 @@ pub async fn load_history(
             let content = if is_private {
                 match content_type.as_str() {
                     "image" => "".to_string(),
-                    "file" => "[已加密文件]".to_string(),
-                    _ => "[已加密文本]".to_string(),
+                    "file" => "[宸插姞瀵嗘枃浠禲".to_string(),
+                    _ => "[宸插姞瀵嗘枃鏈琞".to_string(),
                 }
             } else if content_type == "text" {
                 preview.unwrap_or_default()
@@ -456,7 +1062,7 @@ pub async fn get_text_item(state: State<'_, AppState>, id: i64) -> Result<TextIt
     .ok_or_else(|| format!("text item {} not found", id))?;
 
     if row.try_get::<i64, _>("is_private").unwrap_or(0) != 0 {
-        return Err("该条目已加密，请先通过隐私密码解锁".to_string());
+        return Err("璇ユ潯鐩凡鍔犲瘑锛岃鍏堥€氳繃闅愮瀵嗙爜瑙ｉ攣".to_string());
     }
 
     Ok(TextItemDetail {
@@ -526,7 +1132,7 @@ pub async fn set_privacy_password(
 
     let current = current_password
         .as_deref()
-        .ok_or_else(|| "请输入当前隐私密码".to_string())?;
+        .ok_or_else(|| "Current privacy password is required.".to_string())?;
 
     let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
     for row in private_rows {
@@ -554,7 +1160,10 @@ pub async fn set_privacy_password(
 
     if let Err(e) = tx.commit().await {
         let _ = save_privacy_config(&app, &old_cfg);
-        return Err(format!("更新隐私密码失败，已回滚配置: {}", e));
+        return Err(format!(
+            "Update privacy password failed, config rolled back: {}",
+            e
+        ));
     }
 
     Ok(())
@@ -568,7 +1177,9 @@ pub async fn protect_item(
 ) -> Result<(), String> {
     let cfg = load_privacy_config(&app)?;
     if !has_password(&cfg) || !has_security_question(&cfg) {
-        return Err("请先在设置中配置隐私密码和安全问题后再启用隐私".to_string());
+        return Err(
+            "Configure privacy password and security question before enabling privacy.".to_string(),
+        );
     }
 
     let row = sqlx::query(
@@ -601,7 +1212,7 @@ pub async fn protect_item(
     };
 
     if plain.is_empty() {
-        return Err("该条目内容为空，无法加密".to_string());
+        return Err("Item content is empty and cannot be encrypted.".to_string());
     }
 
     let encrypted = encrypt_content(&cfg, &plain)?;
@@ -663,7 +1274,7 @@ pub async fn unprotect_item(
         .try_get::<Option<String>, _>("encrypted_content")
         .ok()
         .flatten()
-        .ok_or_else(|| "私密数据损坏：缺少密文".to_string())?;
+        .ok_or_else(|| "Private data is corrupted: missing ciphertext.".to_string())?;
 
     let plain = decrypt_content(&cfg, &password, &encrypted)?;
     let content_type: String = row.get("content_type");
@@ -764,7 +1375,7 @@ pub async fn set_tags(
     let is_private = row.try_get::<i64, _>("is_private").unwrap_or(0) != 0;
     let has_privacy_tag = cleaned.iter().any(|t| is_privacy_tag(t));
     if has_privacy_tag != is_private {
-        return Err("隐私标签需通过隐私按钮进行变更".to_string());
+        return Err("闅愮鏍囩闇€閫氳繃闅愮鎸夐挳杩涜鍙樻洿".to_string());
     }
 
     let json = serde_json::to_string(&cleaned).unwrap_or_else(|_| "[]".into());
@@ -882,6 +1493,227 @@ pub async fn create_stack_text_item(
 
     emit_changed(&app).await;
     Ok(id)
+}
+
+pub async fn create_translation_item(
+    app: &AppHandle<impl tauri::Runtime>,
+    state: &AppState,
+    query: &str,
+) -> Result<i64, String> {
+    let pending_content = format!("正在翻译 \"{}\"", query);
+    let metadata = serde_json::to_string(&HashMap::from([
+        ("translationStatus".to_string(), vec!["pending".to_string()]),
+        ("wordQuery".to_string(), vec![query.to_string()]),
+        ("dictionary".to_string(), vec!["ECDICT".to_string()]),
+        (
+            "length".to_string(),
+            vec![pending_content.len().to_string()],
+        ),
+    ]))
+    .unwrap_or_else(|_| "{}".into());
+    let tags = serde_json::to_string(&vec!["Word"]).unwrap_or_else(|_| "[\"Word\"]".into());
+    let hash = compute_hash(
+        "text",
+        &format!(
+            "word:{}:{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            query
+        ),
+    );
+    let id = sqlx::query(
+        "INSERT INTO clipboard_items
+            (content_type, content_hash, preview_text, storage_path, tags, metadata, use_count, last_used_at)
+         VALUES ('text', ?1, ?2, NULL, ?3, ?4, 1, CURRENT_TIMESTAMP)",
+    )
+    .bind(&hash)
+    .bind(&pending_content)
+    .bind(&tags)
+    .bind(&metadata)
+    .execute(&state.pool)
+    .await
+    .map_err(|err| err.to_string())?
+    .last_insert_rowid();
+
+    emit_changed(app).await;
+    Ok(id)
+}
+
+pub async fn update_translation_item(
+    app: &AppHandle<impl tauri::Runtime>,
+    state: &AppState,
+    id: i64,
+    query: &str,
+    content: &str,
+    status: &str,
+) -> Result<(), String> {
+    let metadata = serde_json::to_string(&HashMap::from([
+        ("translationStatus".to_string(), vec![status.to_string()]),
+        ("wordQuery".to_string(), vec![query.to_string()]),
+        ("dictionary".to_string(), vec!["ECDICT".to_string()]),
+        ("length".to_string(), vec![content.len().to_string()]),
+    ]))
+    .unwrap_or_else(|_| "{}".into());
+    let hash = compute_hash("text", content);
+    sqlx::query(
+        "UPDATE clipboard_items
+         SET content_hash = ?1,
+             preview_text = ?2,
+             metadata = ?3,
+             last_used_at = CURRENT_TIMESTAMP
+         WHERE id = ?4 AND (is_private IS NULL OR is_private = 0)",
+    )
+    .bind(hash)
+    .bind(content)
+    .bind(metadata)
+    .bind(id)
+    .execute(&state.pool)
+    .await
+    .map_err(|err| err.to_string())?;
+    emit_changed(app).await;
+    Ok(())
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranslationStateEvent {
+    active: bool,
+    query: String,
+    item_id: i64,
+}
+
+pub async fn translate_selected_text_impl<R: tauri::Runtime>(
+    app: AppHandle<R>,
+) -> Result<(), String> {
+    println!("[EasyCPTrans] Translate selection start");
+    let started = std::time::Instant::now();
+    let before = tauri_plugin_clipboard_x::read_text()
+        .await
+        .unwrap_or_default();
+    println!(
+        "[EasyCPTrans] Translate clipboard before copy: {}",
+        log_text_preview(&before)
+    );
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    crate::simulate_copy_impl();
+    println!("[EasyCPTrans] Translate simulated Ctrl+C");
+    let mut selected = before.clone();
+    for attempt in 0..12 {
+        std::thread::sleep(std::time::Duration::from_millis(45));
+        let current = tauri_plugin_clipboard_x::read_text()
+            .await
+            .unwrap_or_default();
+        println!(
+            "[EasyCPTrans] Translate copy poll: attempt={}, changed={}, valid={}, {}",
+            attempt + 1,
+            current != before,
+            normalize_word_query(&current).is_some(),
+            log_text_preview(&current)
+        );
+        if current.trim().is_empty() {
+            continue;
+        }
+        selected = current;
+        if selected != before || normalize_word_query(&selected).is_some() {
+            break;
+        }
+    }
+    let query = normalize_word_query(&selected)
+        .ok_or_else(|| "Only words or short phrases are supported.".to_string())?;
+    println!(
+        "[EasyCPTrans] Translate normalized query: query=\"{}\", selected={}",
+        query,
+        log_text_preview(&selected)
+    );
+    let state = app.state::<AppState>();
+    let _ = app.emit(
+        "easycp://translation-state",
+        TranslationStateEvent {
+            active: true,
+            query: query.clone(),
+            item_id: 0,
+        },
+    );
+    let item_id = create_translation_item(&app, &state, &query).await?;
+    println!(
+        "[EasyCPTrans] Translate pending item created: id={}, query=\"{}\"",
+        item_id, query
+    );
+    let _ = crate::show_main_window_near_cursor(&app);
+    println!("[EasyCPTrans] Translate panel requested near cursor");
+
+    let result = lookup_ecdict(&app, &query).await;
+    let (content, status, should_write_clipboard) = match result {
+        Ok(Some(entry)) => {
+            println!(
+                "[EasyCPTrans] Translate lookup hit: query=\"{}\", word=\"{}\", translation_len={}, definition_len={}",
+                query,
+                entry.word,
+                entry.translation.len(),
+                entry.definition.len()
+            );
+            (entry.formatted(&query), "done", true)
+        }
+        Ok(None) => {
+            println!("[EasyCPTrans] Translate lookup miss: query=\"{}\"", query);
+            (
+                format!("No ECDICT result for: {}", query),
+                "notFound",
+                false,
+            )
+        }
+        Err(err) => {
+            println!(
+                "[EasyCPTrans] Translate lookup error: query=\"{}\", error={}",
+                query, err
+            );
+            (
+                format!("ECDICT lookup failed for: {}\n\n{}", query, err),
+                "error",
+                false,
+            )
+        }
+    };
+    println!(
+        "[EasyCPTrans] Translate content prepared: status={}, write_clipboard={}, {}",
+        status,
+        should_write_clipboard,
+        log_text_preview(&content)
+    );
+
+    update_translation_item(&app, &state, item_id, &query, &content, status).await?;
+    println!(
+        "[EasyCPTrans] Translate item updated: id={}, status={}",
+        item_id, status
+    );
+    if should_write_clipboard {
+        tauri_plugin_clipboard_x::write_text(content)
+            .await
+            .map_err(|err| err.to_string())?;
+        println!(
+            "[EasyCPTrans] Translate clipboard updated with result: id={}",
+            item_id
+        );
+    }
+    let _ = app.emit(
+        "easycp://translation-state",
+        TranslationStateEvent {
+            active: false,
+            query,
+            item_id,
+        },
+    );
+    println!(
+        "[EasyCPTrans] Translate selection finish: id={}, status={}, elapsed_ms={}",
+        item_id,
+        status,
+        started.elapsed().as_millis()
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn translate_selected_text(app: AppHandle) -> Result<(), String> {
+    translate_selected_text_impl(app).await
 }
 
 #[derive(Debug, Serialize)]
@@ -1044,6 +1876,10 @@ pub struct AppConfig {
     pub quick_paste_prefix: String,
     #[serde(default = "default_stack_shortcut_prefix")]
     pub stack_shortcut_prefix: String,
+    #[serde(default = "default_word_translate_shortcut")]
+    pub word_translate_shortcut: String,
+    #[serde(default)]
+    pub ecdict_path: String,
     #[serde(default = "default_auto_paste")]
     pub auto_paste: bool,
     #[serde(default = "default_keep_window_open")]
@@ -1091,6 +1927,9 @@ fn default_quick_paste_prefix() -> String {
 fn default_stack_shortcut_prefix() -> String {
     "CommandOrControl+Alt".to_string()
 }
+fn default_word_translate_shortcut() -> String {
+    "Alt+C".to_string()
+}
 fn default_keep_window_open() -> bool {
     false
 }
@@ -1116,6 +1955,8 @@ pub struct ConfigResponse {
     pub queue_step_shortcut: String,
     pub quick_paste_prefix: String,
     pub stack_shortcut_prefix: String,
+    pub word_translate_shortcut: String,
+    pub ecdict_path: String,
     pub default_dir: String,
     pub effective_dir: String,
     pub auto_paste: bool,
@@ -1144,6 +1985,8 @@ pub struct PartialAppConfig {
     pub queue_step_shortcut: Option<String>,
     pub quick_paste_prefix: Option<String>,
     pub stack_shortcut_prefix: Option<String>,
+    pub word_translate_shortcut: Option<String>,
+    pub ecdict_path: Option<String>,
     pub auto_paste: Option<bool>,
     pub keep_window_open: Option<bool>,
     pub always_on_top: Option<bool>,
@@ -1180,6 +2023,8 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
         queue_step_shortcut: conf.queue_step_shortcut,
         quick_paste_prefix: conf.quick_paste_prefix,
         stack_shortcut_prefix: conf.stack_shortcut_prefix,
+        word_translate_shortcut: conf.word_translate_shortcut,
+        ecdict_path: conf.ecdict_path,
         default_dir,
         effective_dir,
         auto_paste: conf.auto_paste,
@@ -1222,6 +2067,12 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
     }
     if let Some(value) = config.stack_shortcut_prefix {
         merged.stack_shortcut_prefix = value;
+    }
+    if let Some(value) = config.word_translate_shortcut {
+        merged.word_translate_shortcut = value;
+    }
+    if let Some(value) = config.ecdict_path {
+        merged.ecdict_path = value;
     }
     if let Some(value) = config.auto_paste {
         merged.auto_paste = value;

@@ -627,6 +627,121 @@
   padding: 8px 10px;
 }
 
+.easycp-content-surface.is-translation {
+  border: 1px solid #d7e7f8;
+  border-radius: 8px;
+  background: #f7fbff;
+  padding: 10px 12px;
+}
+
+.easycp-translation-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.easycp-translation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid #e2eefb;
+  padding-bottom: 8px;
+}
+
+.easycp-translation-state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 650;
+  color: #12324a;
+}
+
+.easycp-translation-status {
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: #e6f2ff;
+  padding: 2px 8px;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #0067c0;
+  text-transform: uppercase;
+}
+
+.easycp-translation-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #263238;
+}
+
+.easycp-translation-body p {
+  margin: 0;
+}
+
+.easycp-translation-title {
+  margin-bottom: 2px;
+  font-size: 17px;
+  font-weight: 750;
+  line-height: 1.25;
+  color: #0b3558;
+}
+
+.easycp-translation-phonetic {
+  font-size: 12px;
+  color: #4f6f87;
+}
+
+.easycp-translation-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 2px 0 4px;
+}
+
+.easycp-translation-badges span {
+  border: 1px solid #cfe4f8;
+  border-radius: 999px;
+  background: #edf6ff;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 650;
+  color: #1261a0;
+}
+
+.easycp-translation-section-title {
+  margin-top: 8px;
+  border-left: 3px solid #3a8edb;
+  padding-left: 7px;
+  font-size: 12px;
+  font-weight: 750;
+  color: #12324a;
+}
+
+.easycp-translation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
+.easycp-translation-list li {
+  padding-left: 2px;
+}
+
+.easycp-translation-divider {
+  height: 1px;
+  margin: 10px 0 6px;
+  background: #dceafa;
+}
+
+.easycp-translation-source {
+  font-size: 10.5px;
+  color: #6d8293;
+}
+
 .easycp-code-content {
   margin: 0;
   white-space: pre-wrap;

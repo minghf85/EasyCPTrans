@@ -18,6 +18,7 @@ const DEFAULT_PANEL_SHORTCUT: &str = "CommandOrControl+Shift+V";
 const DEFAULT_QUEUE_STEP_SHORTCUT: &str = "CommandOrControl+Alt+V";
 const DEFAULT_QUICK_PASTE_PREFIX: &str = "Super+Shift";
 const DEFAULT_STACK_SHORTCUT_PREFIX: &str = "CommandOrControl+Alt";
+const DEFAULT_WORD_TRANSLATE_SHORTCUT: &str = "Alt+C";
 const LEGACY_PANEL_SHORTCUT: &str = "Super+Shift+V";
 const SHORTCUT_DEBOUNCE_WINDOW: Duration = Duration::from_millis(280);
 
@@ -53,6 +54,7 @@ enum ShortcutAction {
     TogglePanel,
     QueueStep,
     StackMode { direction: StackDirection },
+    TranslateSelection,
     QuickPaste { index: usize },
 }
 
@@ -149,10 +151,15 @@ fn build_shortcut_bindings(config: &AppConfig) -> Vec<(String, ShortcutAction)> 
     let quick_prefix = non_empty_shortcut(&config.quick_paste_prefix, DEFAULT_QUICK_PASTE_PREFIX);
     let stack_prefix =
         non_empty_shortcut(&config.stack_shortcut_prefix, DEFAULT_STACK_SHORTCUT_PREFIX);
+    let translate = non_empty_shortcut(
+        &config.word_translate_shortcut,
+        DEFAULT_WORD_TRANSLATE_SHORTCUT,
+    );
 
     let mut entries = vec![
         (panel, ShortcutAction::TogglePanel),
         (queue, ShortcutAction::QueueStep),
+        (translate, ShortcutAction::TranslateSelection),
         (
             format!("{stack_prefix}+Up"),
             ShortcutAction::StackMode {
@@ -188,6 +195,7 @@ fn action_name(action: &ShortcutAction) -> String {
             StackDirection::Up => "stack-up".to_string(),
             StackDirection::Down => "stack-down".to_string(),
         },
+        ShortcutAction::TranslateSelection => "translate-selection".to_string(),
         ShortcutAction::QuickPaste { index } => format!("quick-paste-{}", index + 1),
     }
 }
@@ -579,6 +587,24 @@ pub fn handle_plugin_shortcut<R: Runtime>(
                     },
                 );
             }
+        }
+        ShortcutAction::TranslateSelection => {
+            if event.state != ShortcutState::Released {
+                return;
+            }
+            if !should_emit_shortcut(&shortcut_text) {
+                println!(
+                    "[EasyCPTrans] Shortcut suppressed by debounce: {}",
+                    shortcut_text
+                );
+                return;
+            }
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = crate::commands::translate_selected_text_impl(app_handle).await {
+                    println!("[EasyCPTrans] Translate selection failed: {}", err);
+                }
+            });
         }
     }
 }

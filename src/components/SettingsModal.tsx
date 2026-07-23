@@ -9,6 +9,7 @@ interface Props {
     queueStepShortcut: string;
     quickPastePrefix: string;
     stackShortcutPrefix: string;
+    wordTranslateShortcut: string;
     autoPaste: boolean;
     keepWindowOpen: boolean;
     alwaysOnTop: boolean;
@@ -246,6 +247,8 @@ export function SettingsModal({ onSaved }: Props) {
   const [queueStepShortcut, setQueueStepShortcut] = useState("CommandOrControl+Alt+V");
   const [quickPastePrefix, setQuickPastePrefix] = useState("Super+Shift");
   const [stackShortcutPrefix, setStackShortcutPrefix] = useState("CommandOrControl+Alt");
+  const [wordTranslateShortcut, setWordTranslateShortcut] = useState("Alt+C");
+  const [ecdictPath, setEcdictPath] = useState("");
   const [effectiveDir, setEffectiveDir] = useState("");
   const [autoPaste, setAutoPaste] = useState(true);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
@@ -294,6 +297,10 @@ export function SettingsModal({ onSaved }: Props) {
     () => normalizeShortcutValue(stackShortcutPrefix, "CommandOrControl+Alt"),
     [stackShortcutPrefix],
   );
+  const normalizedWordTranslateShortcut = useMemo(
+    () => normalizeShortcutValue(wordTranslateShortcut, "Alt+C"),
+    [wordTranslateShortcut],
+  );
 
   useEffect(() => {
     api
@@ -309,21 +316,26 @@ export function SettingsModal({ onSaved }: Props) {
         const nextQueueStepShortcut = normalizeShortcutValue(cfg.queueStepShortcut, "CommandOrControl+Alt+V");
         const nextQuickPastePrefix = normalizeShortcutValue(cfg.quickPastePrefix, "Super+Shift");
         const nextStackShortcutPrefix = normalizeShortcutValue(cfg.stackShortcutPrefix, "CommandOrControl+Alt");
+        const nextWordTranslateShortcut = normalizeShortcutValue(cfg.wordTranslateShortcut, "Alt+C");
         setShortcut(canonicalizeShortcut(nextShortcut));
         setQueueStepShortcut(canonicalizeShortcut(nextQueueStepShortcut));
         setQuickPastePrefix(canonicalizeShortcut(nextQuickPastePrefix));
         setStackShortcutPrefix(canonicalizeShortcut(nextStackShortcutPrefix));
+        setWordTranslateShortcut(canonicalizeShortcut(nextWordTranslateShortcut));
+        setEcdictPath(cfg.ecdictPath || "");
         if (
           nextShortcut !== (cfg.shortcut ?? "") ||
           nextQueueStepShortcut !== (cfg.queueStepShortcut ?? "") ||
           nextQuickPastePrefix !== (cfg.quickPastePrefix ?? "") ||
-          nextStackShortcutPrefix !== (cfg.stackShortcutPrefix ?? "")
+          nextStackShortcutPrefix !== (cfg.stackShortcutPrefix ?? "") ||
+          nextWordTranslateShortcut !== (cfg.wordTranslateShortcut ?? "")
         ) {
           void api.setConfig({
             shortcut: canonicalizeShortcut(nextShortcut),
             queueStepShortcut: canonicalizeShortcut(nextQueueStepShortcut),
             quickPastePrefix: canonicalizeShortcut(nextQuickPastePrefix),
             stackShortcutPrefix: canonicalizeShortcut(nextStackShortcutPrefix),
+            wordTranslateShortcut: canonicalizeShortcut(nextWordTranslateShortcut),
           }).catch(console.error);
         }
         setEffectiveDir(cfg.effectiveDir || "");
@@ -363,6 +375,8 @@ export function SettingsModal({ onSaved }: Props) {
         queueStepShortcut: normalizedQueueStepShortcut,
         quickPastePrefix: normalizedQuickPastePrefix,
         stackShortcutPrefix: normalizedStackShortcutPrefix,
+        wordTranslateShortcut: normalizedWordTranslateShortcut,
+        ecdictPath,
         autoPaste,
         keepWindowOpen: false,
         alwaysOnTop,
@@ -380,6 +394,7 @@ export function SettingsModal({ onSaved }: Props) {
         queueStepShortcut: normalizedQueueStepShortcut,
         quickPastePrefix: normalizedQuickPastePrefix,
         stackShortcutPrefix: normalizedStackShortcutPrefix,
+        wordTranslateShortcut: normalizedWordTranslateShortcut,
         autoPaste,
         keepWindowOpen: false,
         alwaysOnTop,
@@ -557,6 +572,39 @@ export function SettingsModal({ onSaved }: Props) {
             help="This modifier prefix combines with Up/Down to start or cancel stacking."
             allowModifierOnly
           />
+
+          <ShortcutRecorder
+            label="Word translate shortcut"
+            value={wordTranslateShortcut}
+            defaultValue="Alt+C"
+            onChange={setWordTranslateShortcut}
+            checkAvailability={api.probeShortcutAvailable}
+            help="Copy the selected word or short phrase, then look it up through ECDICT."
+          />
+
+          <label className="easycp-field">
+            <span>ECDICT path</span>
+            <div className="easycp-path-row">
+              <input
+                type="text"
+                value={ecdictPath}
+                onChange={(e) => setEcdictPath(e.target.value)}
+                placeholder="Use app data dictionaries or ./ECDICT/ecdict.csv"
+              />
+              <button
+                type="button"
+                className="easycp-icon-btn"
+                onClick={async () => {
+                  const selected = await open({ directory: false, multiple: false });
+                  if (selected && typeof selected === "string") setEcdictPath(selected);
+                }}
+                title="Choose ECDICT file"
+              >
+                <Folder className="h-4 w-4" />
+              </button>
+            </div>
+            <small>Supports ECDICT sqlite files first, with CSV fallback for local development.</small>
+          </label>
           {quickPastePrefixWarning && <div className="easycp-settings-msg">{quickPastePrefixWarning}</div>}
 
           <label className="easycp-checkrow">

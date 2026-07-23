@@ -29,6 +29,7 @@ type StackState = {
 let resetStackHandler: (() => Promise<void>) | null = null;
 let stackEnabled = false;
 let pastePollTimer: number | null = null;
+let translationSuppressUntil = 0;
 
 export function resetClipboardStack() {
   return resetStackHandler?.() ?? Promise.resolve();
@@ -68,6 +69,7 @@ export function useClipboardWatcher(
     let unlisten: (() => void) | null = null;
     let unlistenStackMode: (() => void) | null = null;
     let unlistenStackReset: (() => void) | null = null;
+    let unlistenTranslationState: (() => void) | null = null;
     let stackState: StackState | null = null;
     let pastePollBusy = false;
 
@@ -239,6 +241,7 @@ export function useClipboardWatcher(
           const text = clipboard.text.value;
           if (text && text !== lastSig) {
             lastSig = text;
+            if (Date.now() < translationSuppressUntil) return;
             if (await stackText(text)) return;
             await ingestText(text);
           }
@@ -288,6 +291,20 @@ export function useClipboardWatcher(
         unlistenStackReset = await listen("easycp://stack-reset", () => {
           void resetStack();
         });
+        unlistenTranslationState = await listen<{
+          active: boolean;
+          query: string;
+          itemId: number;
+        }>("easycp://translation-state", ({ payload }) => {
+          if (payload?.active) {
+            translationSuppressUntil = Date.now() + 15_000;
+            lastSig = payload.query;
+            injectedOverrideSig = payload.query;
+            return;
+          }
+          translationSuppressUntil = Date.now() + 1_500;
+          injectedOverrideSig = null;
+        });
         window.addEventListener("keydown", handleStackPasteKeyDown, true);
       } catch (err) {
         onErrorRef.current("Clipboard watch setup error: " + String(err));
@@ -303,6 +320,7 @@ export function useClipboardWatcher(
       }
       unlistenStackMode?.();
       unlistenStackReset?.();
+      unlistenTranslationState?.();
       if (resetStackHandler === resetStack) {
         resetStackHandler = null;
       }

@@ -53,6 +53,82 @@ function sourceApp(item: HistoryItem) {
   return item.metadata?.sourceApp?.[0] || "EasyCPTrans";
 }
 
+function translationStatus(item: HistoryItem) {
+  return item.metadata?.translationStatus?.[0] || null;
+}
+
+function translationQuery(item: HistoryItem) {
+  return item.metadata?.wordQuery?.[0] || null;
+}
+
+function renderTranslationRichText(content: string) {
+  const lines = content.replace(/\\n/g, "\n").split(/\r?\n/);
+  const nodes: JSX.Element[] = [];
+  let listItems: string[] = [];
+
+  const flushList = () => {
+    if (listItems.length === 0) return;
+    nodes.push(
+      <ul key={`list-${nodes.length}`} className="easycp-translation-list">
+        {listItems.map((line, index) => (
+          <li key={`${line}-${index}`}>{line}</li>
+        ))}
+      </ul>,
+    );
+    listItems = [];
+  };
+
+  lines.forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (!line) {
+      flushList();
+      return;
+    }
+    if (line === "---") {
+      flushList();
+      nodes.push(<div key={`divider-${index}`} className="easycp-translation-divider" />);
+      return;
+    }
+    if (line.startsWith("# ")) {
+      flushList();
+      nodes.push(<div key={`title-${index}`} className="easycp-translation-title">{line.slice(2)}</div>);
+      return;
+    }
+    if (line.startsWith("## ")) {
+      flushList();
+      nodes.push(<div key={`section-${index}`} className="easycp-translation-section-title">{line.slice(3)}</div>);
+      return;
+    }
+    if (line.startsWith("- ")) {
+      listItems.push(line.slice(2));
+      return;
+    }
+    flushList();
+    if (line.startsWith("🏷 ")) {
+      nodes.push(
+        <div key={`badges-${index}`} className="easycp-translation-badges">
+          {line.slice(3).split(" · ").map((badge) => (
+            <span key={badge}>{badge}</span>
+          ))}
+        </div>,
+      );
+      return;
+    }
+    if (line.startsWith("🔊 ")) {
+      nodes.push(<div key={`phonetic-${index}`} className="easycp-translation-phonetic">{line}</div>);
+      return;
+    }
+    if (line.startsWith("source:") || line.startsWith("query:")) {
+      nodes.push(<div key={`source-${index}`} className="easycp-translation-source">{line}</div>);
+      return;
+    }
+    nodes.push(<p key={`p-${index}`}>{line}</p>);
+  });
+
+  flushList();
+  return nodes.length ? nodes : content;
+}
+
 interface Props {
   item: HistoryItem;
   availableTags: string[];
@@ -96,6 +172,9 @@ export function ClipboardCard({
   const totalSize = item.metadata?.totalSize?.[0] ?? item.metadata?.size?.[0];
   const width = item.metadata?.width?.[0];
   const height = item.metadata?.height?.[0];
+  const translationState = translationStatus(item);
+  const translationWord = translationQuery(item);
+  const isTranslationItem = item.tags.includes("Word") || Boolean(translationState || translationWord);
 
   const handleMenuAction = (
     event: MouseEvent<HTMLButtonElement>,
@@ -179,8 +258,26 @@ export function ClipboardCard({
         onClick={() => onPaste(item)}
         onWheel={(event) => stopOuterScroll(event, "y")}
       >
-        <div className={`easycp-content-surface ${codeLike ? "is-code" : ""}`}>
-          {codeLike ? (
+        <div className={`easycp-content-surface ${codeLike ? "is-code" : ""} ${isTranslationItem ? "is-translation" : ""}`}>
+          {isTranslationItem ? (
+            <div className="easycp-translation-card">
+              <div className="easycp-translation-head">
+                <span className="easycp-translation-state">
+                  {translationState === "pending"
+                    ? `Translating ${translationWord || item.content || "..."}`
+                    : translationWord || item.content || "Translation"}
+                </span>
+                <span className="easycp-translation-status">
+                  {translationState === "pending" ? "Pending" : translationState === "error" ? "Error" : "Ready"}
+                </span>
+              </div>
+              <div className={`easycp-translation-body ${hasPrivacy ? "is-private" : ""}`}>
+                {translationState === "pending"
+                  ? item.content || "Translating..."
+                  : renderTranslationRichText(item.content || "Empty translation")}
+              </div>
+            </div>
+          ) : codeLike ? (
             <pre className={`easycp-code-content ${hasPrivacy ? "is-private" : ""}`}>{item.content || "Empty text item"}</pre>
           ) : (
             <div className={`easycp-text-content ${hasPrivacy ? "is-private" : ""}`}>{item.content || "Empty text item"}</div>

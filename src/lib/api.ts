@@ -64,6 +64,11 @@ export const api = {
 
   simulatePaste: () => invoke<void>("simulate_paste"),
 
+  translateSelectedText: () => invoke<void>("translate_selected_text"),
+
+  convertEcdictCsvToSqlite: (csvPath: string, dbPath: string) =>
+    invoke<number>("convert_ecdict_csv_to_sqlite", { csvPath, dbPath }),
+
   saveTempImage: (dataUrl: string) =>
     invoke<string>("save_temp_image", { dataUrl }),
 
@@ -82,6 +87,8 @@ export const api = {
       queueStepShortcut?: string;
       quickPastePrefix?: string;
       stackShortcutPrefix?: string;
+      wordTranslateShortcut?: string;
+      ecdictPath?: string;
       defaultDir: string;
       effectiveDir: string;
       autoPaste: boolean;
@@ -107,6 +114,8 @@ export const api = {
     queueStepShortcut?: string;
     quickPastePrefix?: string;
     stackShortcutPrefix?: string;
+    wordTranslateShortcut?: string;
+    ecdictPath?: string;
     autoPaste?: boolean;
     keepWindowOpen?: boolean;
     alwaysOnTop?: boolean;
