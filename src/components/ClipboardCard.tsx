@@ -18,7 +18,7 @@ import {
   Tag,
   Trash2,
 } from "lucide-react";
-import { formatTime } from "../lib/time";
+import { formatExactTime, formatTime } from "../lib/time";
 import type { HistoryItem } from "../types";
 function formatBytes(bytes: number, decimals = 1) {
   if (!+bytes) return "0 B";
@@ -453,7 +453,7 @@ export function ClipboardCard({
 
       <div className="eacptrans-meta-strip" onClick={(e) => e.stopPropagation()} onWheel={(event) => stopOuterScroll(event, "x")}>
         <span className={`eacptrans-meta-item eacptrans-type-badge ${typeBadgeClass}`}>{typeLabel}</span>
-        <span className="eacptrans-meta-item">
+        <span className="eacptrans-meta-item" title={formatExactTime(item.lastUsedAt)}>
           <Clock3 className="h-3 w-3" />
           {formatTime(item.lastUsedAt)}
         </span>

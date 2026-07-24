@@ -52,6 +52,31 @@ EasyCPTrans 是一个把「历史剪切板」和「划词翻译」良性结合�
 - 隐私保护：private item 加密存储，支持解锁查看。
 - WebDAV：保留同步配置和基础同步入口。
 
+## 搜索与筛选
+
+点击顶部搜索按钮后可以进行全文搜索，也可以使用结构化语法缩小范围。
+
+常用语法：
+
+| 语法 | 示例 | 说明 |
+| --- | --- | --- |
+| 普通关键词 | `hello` | 匹配 item 内容、标签和来源应用 |
+| 精确短语 | `"hello world"` | 匹配连续短语 |
+| 标签 | `tag:work` | 只看包含指定 tag 的 item |
+| 来源应用 | `app:chrome` | 按复制来源窗口/应用筛选 |
+| 类型 | `type:text`、`type:image`、`type:file` | 按 item 类型筛选 |
+| 时间 | `date:today`、`date:7d` | 按最近时间范围筛选 |
+| 大小 | `size:<5mb`、`size:>100kb` | 按文本/文件/图片大小筛选 |
+| 隐私 | `is:private`、`is:public` | 按 private 状态筛选 |
+
+可以组合使用，例如：
+
+```text
+tag:word type:text app:chrome "specific"
+type:image date:7d
+size:<5mb is:public
+```
+
 ## 默认快捷键
 
 | 功能 | 默认快捷键 |

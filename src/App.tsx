@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { writeFiles, writeImage, writeText } from "tauri-plugin-clipboard-x-api";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -179,7 +179,6 @@ function MainApp() {
   const [managedTags, setManagedTags] = useState<ManagedTag[]>([]);
   const [tagManageBusy, setTagManageBusy] = useState(false);
   const [tagSelectorOpen, setTagSelectorOpen] = useState(false);
-  const [tagSelectorStyle, setTagSelectorStyle] = useState<CSSProperties>({});
   const [quickTagItemId, setQuickTagItemId] = useState<number | null>(null);
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -1128,22 +1127,13 @@ function MainApp() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeView, currentPageItems, privacyAction, quickTagItemId, searchOpen, selectedId, queuedIds, sourceHistory, cardRows, page, totalPages, alwaysOnTop, itemTagShortcut, itemPrivateShortcut, itemPinShortcut, itemDeleteShortcut]);
 
-  const onTabClick = (key: ActiveView, event?: React.MouseEvent<HTMLButtonElement>) => {
+  const onTabClick = (key: ActiveView) => {
     if (key === "tag-selector") {
       if (tagSelectorOpen) {
         setTagSelectorOpen(false);
         setActiveTags([]);
         setActiveView("all");
-        setTagSelectorStyle({});
       } else {
-        const shellRect = shellRef.current?.getBoundingClientRect();
-        const tabRect = event?.currentTarget.getBoundingClientRect();
-        if (shellRect && tabRect) {
-          setTagSelectorStyle({
-            left: `${Math.max(14, tabRect.left - shellRect.left)}px`,
-            top: `${tabRect.bottom - shellRect.top + 6}px`,
-          });
-        }
         setTagSelectorOpen(true);
         setActiveView("tag-selector");
         setScope("all");
@@ -1152,7 +1142,6 @@ function MainApp() {
     }
 
     setTagSelectorOpen(false);
-    setTagSelectorStyle({});
     setActiveView(key);
     if (key === "settings" || key === "tag-manager") {
       setScope("all");
@@ -1257,31 +1246,58 @@ function MainApp() {
                 ? allKnownTags.find((tag) => tag.id === SYSTEM_TAGS.find((entry) => entry.key === key)?.id)
                 : null;
               return (
-                <button
-                  key={key}
-                  className={`eacptrans-filter-tab ${active ? "active" : ""}`}
-                  style={
-                    key.startsWith("tag:") || systemConfig
-                      ? ({
-                          borderColor: active ? `${systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR}55` : undefined,
-                          background: active ? `${systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR}14` : undefined,
-                          color: active ? systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? undefined : undefined,
-                        } as object)
-                      : undefined
-                  }
-                  onClick={(event) => onTabClick(key, event)}
-                >
-                  <span
-                    className={`eacptrans-tab-dot ${dotClass}`}
+                <Fragment key={key}>
+                  <button
+                    className={`eacptrans-filter-tab ${active ? "active" : ""}`}
                     style={
                       key.startsWith("tag:") || systemConfig
-                        ? ({ background: systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR } as object)
+                        ? ({
+                            borderColor: active ? `${systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR}55` : undefined,
+                            background: active ? `${systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR}14` : undefined,
+                            color: active ? systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? undefined : undefined,
+                          } as object)
                         : undefined
                     }
-                  />
-                  <span>{label}</span>
-                  <Icon className="h-3.5 w-3.5" />
-                </button>
+                    onClick={() => onTabClick(key)}
+                  >
+                    <span
+                      className={`eacptrans-tab-dot ${dotClass}`}
+                      style={
+                        key.startsWith("tag:") || systemConfig
+                          ? ({ background: systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR } as object)
+                          : undefined
+                      }
+                    />
+                    <span>{label}</span>
+                    <Icon className="h-3.5 w-3.5" />
+                  </button>
+                  {key === "tag-selector" && tagSelectorOpen && (
+                    <div className="eacptrans-tag-inline-list">
+                      {selectableTags.length === 0 ? (
+                        <span className="eacptrans-tag-inline-empty">No tags</span>
+                      ) : (
+                        selectableTags.map((tag) => {
+                          const tagActive = activeTags.includes(tag.name);
+                          return (
+                            <button
+                              key={tag.name}
+                              className={`eacptrans-tag-inline-chip ${tagActive ? "active" : ""}`}
+                              style={{
+                                borderColor: tagActive ? `${tag.color}66` : undefined,
+                                background: tagActive ? `${tag.color}14` : undefined,
+                                color: tagActive ? tag.color : undefined,
+                              }}
+                              onClick={() => toggleTag(tag.name)}
+                            >
+                              {tagActive ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+                              <span>#{tag.name}</span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </Fragment>
               );
             })}
           </div>
@@ -1290,36 +1306,6 @@ function MainApp() {
             <ChevronRight className="h-4 w-4" />
           </button>
       </section>
-
-      {tagSelectorOpen && (
-        <div className="eacptrans-tag-selector-panel" style={tagSelectorStyle}>
-          <div className="eacptrans-tag-selector-list">
-            {selectableTags.length === 0 ? (
-              <div className="eacptrans-tag-selector-empty">No tags available.</div>
-            ) : (
-              selectableTags.map((tag) => {
-                const active = activeTags.includes(tag.name);
-                return (
-                  <button
-                    key={tag.name}
-                    className={`eacptrans-tag-selector-option ${active ? "active" : ""}`}
-                    style={{
-                      borderColor: active ? `${tag.color}66` : undefined,
-                      background: active ? `${tag.color}14` : undefined,
-                      color: active ? tag.color : undefined,
-                    }}
-                    onClick={() => toggleTag(tag.name)}
-                  >
-                    {active ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
-                    <span>#{tag.name}</span>
-                    {tag.common && <Star className="eacptrans-tag-selector-star h-3 w-3" style={{ color: tag.color }} />}
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
 
       <ErrorBanner message={errorMsg} />
 
