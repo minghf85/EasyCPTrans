@@ -1671,7 +1671,7 @@ pub async fn translate_selected_text_impl<R: tauri::Runtime>(
     );
     let state = app.state::<AppState>();
     let _ = app.emit(
-        "easycp://translation-state",
+        "eacptrans://translation-state",
         TranslationStateEvent {
             active: true,
             query: query.clone(),
@@ -1740,7 +1740,7 @@ pub async fn translate_selected_text_impl<R: tauri::Runtime>(
         );
     }
     let _ = app.emit(
-        "easycp://translation-state",
+        "eacptrans://translation-state",
         TranslationStateEvent {
             active: false,
             query,

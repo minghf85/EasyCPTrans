@@ -33,10 +33,10 @@ struct QueueState {
     ids: Vec<i64>,
 }
 
-const QUEUE_UPDATED_EVENT_NAME: &str = "easycp://queue-updated";
-const STACK_MODE_EVENT_NAME: &str = "easycp://stack-mode";
-const STACK_RESET_EVENT_NAME: &str = "easycp://stack-reset";
-const CLIPBOARD_OVERRIDE_EVENT_NAME: &str = "easycp://clipboard-override";
+const QUEUE_UPDATED_EVENT_NAME: &str = "eacptrans://queue-updated";
+const STACK_MODE_EVENT_NAME: &str = "eacptrans://stack-mode";
+const STACK_RESET_EVENT_NAME: &str = "eacptrans://stack-reset";
+const CLIPBOARD_OVERRIDE_EVENT_NAME: &str = "eacptrans://clipboard-override";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

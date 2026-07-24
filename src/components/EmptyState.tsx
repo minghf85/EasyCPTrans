@@ -21,7 +21,7 @@ export function EmptyState({ filtered, onClear }: Props) {
       <p className="mt-2 max-w-sm text-sm text-slate-500">
         {filtered
           ? "Try a different keyword, tag, or clear the active filters."
-          : "Copy text, images, or files and EasyCP will capture them into this floating deck."}
+          : "Copy text, images, or files and EasyCPTrans will capture them into this floating deck."}
       </p>
       {filtered && onClear && (
         <button

@@ -285,21 +285,21 @@ export function useClipboardWatcher(
           saveImagePath: imagePath,
         });
         unlistenStackMode = await listen<{ direction: StackDirection }>(
-          "easycp://stack-mode",
+          "eacptrans://stack-mode",
           ({ payload }) => {
             if (payload?.direction === "up" || payload?.direction === "down") {
               toggleStackMode(payload.direction);
             }
           },
         );
-        unlistenStackReset = await listen("easycp://stack-reset", () => {
+        unlistenStackReset = await listen("eacptrans://stack-reset", () => {
           void resetStack();
         });
         unlistenTranslationState = await listen<{
           active: boolean;
           query: string;
           itemId: number;
-        }>("easycp://translation-state", ({ payload }) => {
+        }>("eacptrans://translation-state", ({ payload }) => {
           if (payload?.active) {
             translationSuppressUntil = Date.now() + 15_000;
             lastSig = payload.query;
@@ -310,7 +310,7 @@ export function useClipboardWatcher(
           injectedOverrideSig = null;
         });
         unlistenClipboardOverride = await listen<{ sig: string }>(
-          "easycp://clipboard-override",
+          "eacptrans://clipboard-override",
           ({ payload }) => {
             if (!payload?.sig) return;
             injectedOverrideSig = payload.sig;

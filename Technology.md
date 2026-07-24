@@ -144,7 +144,7 @@ ORDER BY is_pinned DESC, last_used_at DESC, id DESC
 
 1. 后端收到 `Ctrl + Shift + 1~9/0`。
 2. 按当前排序加载对应 item。
-3. 发出 `easycp://clipboard-override`，通知前端 watcher 暂停自动入库。
+3. 发出 `eacptrans://clipboard-override`，通知前端 watcher 暂停自动入库。
 4. 将 item 写入系统剪切板。
 5. 等待快捷键修饰键释放。
 6. 模拟 `Ctrl + V`。
@@ -202,11 +202,11 @@ private item 会清空明文 `preview_text/storage_path/content_hash`，内容�
 | 事件 | 发送方 | 接收方 | 说明 |
 | --- | --- | --- | --- |
 | `clipboard-changed` | 后端 | `useHistory` | 历史数据变化后刷新 |
-| `easycp://queue-updated` | 后端 | `App.tsx` | 队列出队后同步前端 |
-| `easycp://stack-mode` | 后端 | `useClipboardWatcher` | 开启堆叠复制 |
-| `easycp://stack-reset` | 后端 | `useClipboardWatcher` | 关闭堆叠复制 |
-| `easycp://translation-state` | 后端 | `useClipboardWatcher` | 翻译期间抑制重复入库 |
-| `easycp://clipboard-override` | 后端 | `useClipboardWatcher` | 程序主动写剪切板时抑制重复入库 |
+| `eacptrans://queue-updated` | 后端 | `App.tsx` | 队列出队后同步前端 |
+| `eacptrans://stack-mode` | 后端 | `useClipboardWatcher` | 开启堆叠复制 |
+| `eacptrans://stack-reset` | 后端 | `useClipboardWatcher` | 关闭堆叠复制 |
+| `eacptrans://translation-state` | 后端 | `useClipboardWatcher` | 翻译期间抑制重复入库 |
+| `eacptrans://clipboard-override` | 后端 | `useClipboardWatcher` | 程序主动写剪切板时抑制重复入库 |
 
 ### 剪切板监听
 

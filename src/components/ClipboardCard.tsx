@@ -69,9 +69,9 @@ function renderTranslationRichText(content: string) {
   const flushList = () => {
     if (listItems.length === 0) return;
     nodes.push(
-      <div key={`list-${nodes.length}`} className="easycp-translation-list">
+      <div key={`list-${nodes.length}`} className="eacptrans-translation-list">
         {listItems.map((line, index) => (
-          <div key={`${line}-${index}`} className="easycp-translation-list-line">{line}</div>
+          <div key={`${line}-${index}`} className="eacptrans-translation-list-line">{line}</div>
         ))}
       </div>,
     );
@@ -86,17 +86,17 @@ function renderTranslationRichText(content: string) {
     }
     if (line === "---") {
       flushList();
-      nodes.push(<div key={`divider-${index}`} className="easycp-translation-divider" />);
+      nodes.push(<div key={`divider-${index}`} className="eacptrans-translation-divider" />);
       return;
     }
     if (line.startsWith("# ")) {
       flushList();
-      nodes.push(<div key={`title-${index}`} className="easycp-translation-title">{line.slice(2)}</div>);
+      nodes.push(<div key={`title-${index}`} className="eacptrans-translation-title">{line.slice(2)}</div>);
       return;
     }
     if (line.startsWith("## ")) {
       flushList();
-      nodes.push(<div key={`section-${index}`} className="easycp-translation-section-title">{line.slice(3)}</div>);
+      nodes.push(<div key={`section-${index}`} className="eacptrans-translation-section-title">{line.slice(3)}</div>);
       return;
     }
     if (line.startsWith("- ")) {
@@ -106,7 +106,7 @@ function renderTranslationRichText(content: string) {
     flushList();
     if (line.startsWith("🏷 ")) {
       nodes.push(
-        <div key={`badges-${index}`} className="easycp-translation-badges">
+        <div key={`badges-${index}`} className="eacptrans-translation-badges">
           {line.slice(3).split(" · ").map((badge) => (
             <span key={badge}>{badge}</span>
           ))}
@@ -115,11 +115,11 @@ function renderTranslationRichText(content: string) {
       return;
     }
     if (line.startsWith("🔊 ")) {
-      nodes.push(<div key={`phonetic-${index}`} className="easycp-translation-phonetic">{line}</div>);
+      nodes.push(<div key={`phonetic-${index}`} className="eacptrans-translation-phonetic">{line}</div>);
       return;
     }
     if (line.startsWith("source:") || line.startsWith("query:")) {
-      nodes.push(<div key={`source-${index}`} className="easycp-translation-source">{line}</div>);
+      nodes.push(<div key={`source-${index}`} className="eacptrans-translation-source">{line}</div>);
       return;
     }
     nodes.push(<p key={`p-${index}`}>{line}</p>);
@@ -231,17 +231,17 @@ export function ClipboardCard({
     if (item.contentType === "image") {
       return (
         <div
-          className="easycp-card-body easycp-card-body-image"
+          className="eacptrans-card-body eacptrans-card-body-image"
           onClick={() => onPaste(item)}
           onWheel={(event) => stopOuterScroll(event, "y")}
         >
           {hasPrivacy || !item.content ? (
-            <div className="easycp-image-placeholder">
+            <div className="eacptrans-image-placeholder">
               <ImageIcon className="h-8 w-8" />
               <span>Private image</span>
             </div>
           ) : (
-            <img src={item.content} alt="Clipboard content" className="easycp-image-preview" />
+            <img src={item.content} alt="Clipboard content" className="eacptrans-image-preview" />
           )}
         </div>
       );
@@ -251,14 +251,14 @@ export function ClipboardCard({
       const files = item.content.split("\n").filter(Boolean);
       return (
         <div
-          className="easycp-card-body"
+          className="eacptrans-card-body"
           onClick={() => onPaste(item)}
           onWheel={(event) => stopOuterScroll(event, "y")}
         >
-          <div className="easycp-file-stack">
+          <div className="eacptrans-file-stack">
             {files.map((file, index) => (
-              <div key={`${item.id}-${index}`} className={`easycp-file-row ${hasPrivacy ? "is-private" : ""}`}>
-                <div className="easycp-file-main">
+              <div key={`${item.id}-${index}`} className={`eacptrans-file-row ${hasPrivacy ? "is-private" : ""}`}>
+                <div className="eacptrans-file-main">
                   <Folder className="h-4 w-4" />
                   <span>{file}</span>
                 </div>
@@ -274,33 +274,33 @@ export function ClipboardCard({
 
     return (
       <div
-        className="easycp-card-body"
+        className="eacptrans-card-body"
         onClick={() => onPaste(item)}
         onWheel={(event) => stopOuterScroll(event, "y")}
       >
-        <div className={`easycp-content-surface ${codeLike ? "is-code" : ""} ${isTranslationItem ? "is-translation" : ""}`}>
+        <div className={`eacptrans-content-surface ${codeLike ? "is-code" : ""} ${isTranslationItem ? "is-translation" : ""}`}>
           {isTranslationItem ? (
-            <div className="easycp-translation-card">
-              <div className="easycp-translation-head">
-                <span className="easycp-translation-state">
+            <div className="eacptrans-translation-card">
+              <div className="eacptrans-translation-head">
+                <span className="eacptrans-translation-state">
                   {translationState === "pending"
                     ? `Translating ${translationWord || item.content || "..."}`
                     : translationWord || item.content || "Translation"}
                 </span>
-                <span className="easycp-translation-status">
+                <span className="eacptrans-translation-status">
                   {translationState === "pending" ? "Pending" : translationState === "error" ? "Error" : "Ready"}
                 </span>
               </div>
-              <div className={`easycp-translation-body ${hasPrivacy ? "is-private" : ""}`}>
+              <div className={`eacptrans-translation-body ${hasPrivacy ? "is-private" : ""}`}>
                 {translationState === "pending"
                   ? item.content || "Translating..."
                   : renderTranslationRichText(item.content || "Empty translation")}
               </div>
             </div>
           ) : codeLike ? (
-            <pre className={`easycp-code-content ${hasPrivacy ? "is-private" : ""}`}>{item.content || "Empty text item"}</pre>
+            <pre className={`eacptrans-code-content ${hasPrivacy ? "is-private" : ""}`}>{item.content || "Empty text item"}</pre>
           ) : (
-            <div className={`easycp-text-content ${hasPrivacy ? "is-private" : ""}`}>{item.content || "Empty text item"}</div>
+            <div className={`eacptrans-text-content ${hasPrivacy ? "is-private" : ""}`}>{item.content || "Empty text item"}</div>
           )}
         </div>
       </div>
@@ -310,20 +310,20 @@ export function ClipboardCard({
   return (
     <article
       id={`history-item-${item.id}`}
-      className={`easycp-card ${isSelected ? "selected" : ""}`}
+      className={`eacptrans-card ${isSelected ? "selected" : ""}`}
     >
-      <div className="easycp-card-head">
-        <div className="easycp-card-app">
-          <span className="easycp-card-appicon">
+      <div className="eacptrans-card-head">
+        <div className="eacptrans-card-app">
+          <span className="eacptrans-card-appicon">
             <Monitor className="h-3.5 w-3.5" />
           </span>
-          <span className="easycp-card-appname">{sourceApp(item)}</span>
+          <span className="eacptrans-card-appname">{sourceApp(item)}</span>
         </div>
 
-        {quickSlot && <span className="easycp-card-quick-badge">#{quickSlot}</span>}
+        {quickSlot && <span className="eacptrans-card-quick-badge">#{quickSlot}</span>}
 
         <button
-          className={`easycp-more-btn ${menuOpen ? "active" : ""}`}
+          className={`eacptrans-more-btn ${menuOpen ? "active" : ""}`}
           onClick={(e) => {
             e.stopPropagation();
             if (menuOpen) {
@@ -334,29 +334,29 @@ export function ClipboardCard({
           }}
           title="More actions"
         >
-          <ChevronDown className="easycp-more-icon h-4 w-4" />
+          <ChevronDown className="eacptrans-more-icon h-4 w-4" />
         </button>
       </div>
 
-      {queueSlot && <div className="easycp-card-queue-badge">Q{queueSlot}</div>}
+      {queueSlot && <div className="eacptrans-card-queue-badge">Q{queueSlot}</div>}
 
       {menuOpen && (
         <>
           {tagPickerOpen && (
             <div
-              className="easycp-card-menu easycp-card-tag-picker"
+              className="eacptrans-card-menu eacptrans-card-tag-picker"
               onClick={(e) => e.stopPropagation()}
               onWheel={(event) => stopOuterScroll(event, "y")}
             >
               {availableTags.length === 0 ? (
-                <div className="easycp-card-menu-empty">No tags available</div>
+                <div className="eacptrans-card-menu-empty">No tags available</div>
               ) : (
                 availableTags.map((tag) => {
                   const active = item.tags.includes(tag);
                   return (
                     <button
                       key={tag}
-                      className={`easycp-card-tag-option ${active ? "active" : ""}`}
+                      className={`eacptrans-card-tag-option ${active ? "active" : ""}`}
                       onClick={(event) => handleMenuAction(event, () => {
                         onToggleTag(item.id, tag);
                       })}
@@ -371,7 +371,7 @@ export function ClipboardCard({
           )}
 
           <div
-            className="easycp-card-menu"
+            className="eacptrans-card-menu"
             onClick={(e) => e.stopPropagation()}
             onWheel={(event) => stopOuterScroll(event, "y")}
           >
@@ -451,29 +451,29 @@ export function ClipboardCard({
 
       {renderBody()}
 
-      <div className="easycp-meta-strip" onClick={(e) => e.stopPropagation()} onWheel={(event) => stopOuterScroll(event, "x")}>
-        <span className={`easycp-meta-item easycp-type-badge ${typeBadgeClass}`}>{typeLabel}</span>
-        <span className="easycp-meta-item">
+      <div className="eacptrans-meta-strip" onClick={(e) => e.stopPropagation()} onWheel={(event) => stopOuterScroll(event, "x")}>
+        <span className={`eacptrans-meta-item eacptrans-type-badge ${typeBadgeClass}`}>{typeLabel}</span>
+        <span className="eacptrans-meta-item">
           <Clock3 className="h-3 w-3" />
           {formatTime(item.lastUsedAt)}
         </span>
-        {chars && <span className="easycp-meta-item">{chars} chars</span>}
-        {width && height && <span className="easycp-meta-item">{width} x {height}</span>}
-        {totalSize && <span className="easycp-meta-item">{formatBytes(parseInt(totalSize, 10))}</span>}
+        {chars && <span className="eacptrans-meta-item">{chars} chars</span>}
+        {width && height && <span className="eacptrans-meta-item">{width} x {height}</span>}
+        {totalSize && <span className="eacptrans-meta-item">{formatBytes(parseInt(totalSize, 10))}</span>}
         {item.pinned && (
-          <span className="easycp-meta-item">
+          <span className="eacptrans-meta-item">
             <Pin className="h-3 w-3" />
             Pinned
           </span>
         )}
         {hasPrivacy && (
-          <span className="easycp-meta-item">
+          <span className="eacptrans-meta-item">
             <EyeOff className="h-3 w-3" />
             Private
           </span>
         )}
         {item.tags.map((tag) => (
-          <span key={tag} className="easycp-tag-chip">
+          <span key={tag} className="eacptrans-tag-chip">
             <Tag className="h-3 w-3" />#{tag}
           </span>
         ))}

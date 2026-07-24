@@ -380,13 +380,13 @@ function MainApp() {
       if (!node) return () => {};
       const onWheel = (event: WheelEvent) => {
         const target = event.target as HTMLElement | null;
-        const body = target?.closest(".easycp-card-body") as HTMLElement | null;
+        const body = target?.closest(".eacptrans-card-body") as HTMLElement | null;
         if (body && body.scrollHeight > body.clientHeight) return;
-        const meta = target?.closest(".easycp-meta-strip") as HTMLElement | null;
+        const meta = target?.closest(".eacptrans-meta-strip") as HTMLElement | null;
         if (meta && meta.scrollWidth > meta.clientWidth) return;
-        const menu = target?.closest(".easycp-card-menu") as HTMLElement | null;
+        const menu = target?.closest(".eacptrans-card-menu") as HTMLElement | null;
         if (menu && menu.scrollHeight > menu.clientHeight) return;
-        const tags = target?.closest(".easycp-tags-wrap") as HTMLElement | null;
+        const tags = target?.closest(".eacptrans-tags-wrap") as HTMLElement | null;
         if (tags && tags.scrollWidth > tags.clientWidth) return;
 
         const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
@@ -947,7 +947,7 @@ function MainApp() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listen<{ ids: number[] }>("easycp://queue-updated", ({ payload }) => {
+    void listen<{ ids: number[] }>("eacptrans://queue-updated", ({ payload }) => {
       if (!payload || !Array.isArray(payload.ids)) return;
       setQueuedIds(payload.ids);
     }).then((fn) => {
@@ -1169,9 +1169,9 @@ function MainApp() {
   };
 
   return (
-    <div className="easycp-shell" ref={shellRef}>
+    <div className="eacptrans-shell" ref={shellRef}>
       <div
-        className="easycp-drag-edge easycp-drag-edge-top"
+        className="eacptrans-drag-edge eacptrans-drag-edge-top"
         data-tauri-drag-region
         onMouseDown={() => {
           edgeInteractingRef.current = true;
@@ -1180,7 +1180,7 @@ function MainApp() {
         }}
       />
       <div
-        className="easycp-drag-edge easycp-drag-edge-left"
+        className="eacptrans-drag-edge eacptrans-drag-edge-left"
         data-tauri-drag-region
         onMouseDown={() => {
           edgeInteractingRef.current = true;
@@ -1189,7 +1189,7 @@ function MainApp() {
         }}
       />
       <div
-        className="easycp-drag-edge easycp-drag-edge-right"
+        className="eacptrans-drag-edge eacptrans-drag-edge-right"
         data-tauri-drag-region
         onMouseDown={() => {
           edgeInteractingRef.current = true;
@@ -1198,9 +1198,9 @@ function MainApp() {
         }}
       />
 
-      <section className="easycp-toolbar">
+      <section className="eacptrans-toolbar">
           <button
-            className="easycp-icon-btn easycp-drag-handle-btn"
+            className="eacptrans-icon-btn eacptrans-drag-handle-btn"
             title="Drag window"
             onMouseDown={(event) => {
               event.preventDefault();
@@ -1213,7 +1213,7 @@ function MainApp() {
           </button>
 
           <button
-            className={`easycp-icon-btn ${alwaysOnTop ? "active" : ""}`}
+            className={`eacptrans-icon-btn ${alwaysOnTop ? "active" : ""}`}
             title={alwaysOnTop ? "Unpin window" : "Pin window on top"}
             onClick={() => {
               const next = !alwaysOnTop;
@@ -1224,9 +1224,9 @@ function MainApp() {
             <Pin className="h-4 w-4" />
           </button>
 
-          <div className="easycp-search-wrap">
+          <div className="eacptrans-search-wrap">
             <button
-              className="easycp-search-btn"
+              className="eacptrans-search-btn"
               title="Search (supports tag/app/type/date/size syntax)"
               onClick={() => {
                 const next = !searchOpen;
@@ -1236,7 +1236,7 @@ function MainApp() {
             >
               <Search className="h-4 w-4" />
             </button>
-            <div className={`easycp-search-expand ${searchOpen ? "open" : ""}`}>
+            <div className={`eacptrans-search-expand ${searchOpen ? "open" : ""}`}>
               <input
                 autoFocus={searchOpen}
                 value={search}
@@ -1246,11 +1246,11 @@ function MainApp() {
             </div>
           </div>
 
-          <button className="easycp-scroll-arrow" onClick={() => handleScrollTabs("left")}>
+          <button className="eacptrans-scroll-arrow" onClick={() => handleScrollTabs("left")}>
             <ChevronLeft className="h-4 w-4" />
           </button>
 
-          <div className="easycp-filter-scroll" id="filter-scroll">
+          <div className="eacptrans-filter-scroll" id="filter-scroll">
             {tabList.map(({ key, label, dotClass, icon: Icon }) => {
               const active = key === "tag-selector" ? tagSelectorOpen : activeView === key;
               const systemConfig = SYSTEM_TAGS.find((tag) => tag.key === key)
@@ -1259,7 +1259,7 @@ function MainApp() {
               return (
                 <button
                   key={key}
-                  className={`easycp-filter-tab ${active ? "active" : ""}`}
+                  className={`eacptrans-filter-tab ${active ? "active" : ""}`}
                   style={
                     key.startsWith("tag:") || systemConfig
                       ? ({
@@ -1272,7 +1272,7 @@ function MainApp() {
                   onClick={(event) => onTabClick(key, event)}
                 >
                   <span
-                    className={`easycp-tab-dot ${dotClass}`}
+                    className={`eacptrans-tab-dot ${dotClass}`}
                     style={
                       key.startsWith("tag:") || systemConfig
                         ? ({ background: systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR } as object)
@@ -1286,23 +1286,23 @@ function MainApp() {
             })}
           </div>
 
-          <button className="easycp-scroll-arrow" onClick={() => handleScrollTabs("right")}>
+          <button className="eacptrans-scroll-arrow" onClick={() => handleScrollTabs("right")}>
             <ChevronRight className="h-4 w-4" />
           </button>
       </section>
 
       {tagSelectorOpen && (
-        <div className="easycp-tag-selector-panel" style={tagSelectorStyle}>
-          <div className="easycp-tag-selector-list">
+        <div className="eacptrans-tag-selector-panel" style={tagSelectorStyle}>
+          <div className="eacptrans-tag-selector-list">
             {selectableTags.length === 0 ? (
-              <div className="easycp-tag-selector-empty">No tags available.</div>
+              <div className="eacptrans-tag-selector-empty">No tags available.</div>
             ) : (
               selectableTags.map((tag) => {
                 const active = activeTags.includes(tag.name);
                 return (
                   <button
                     key={tag.name}
-                    className={`easycp-tag-selector-option ${active ? "active" : ""}`}
+                    className={`eacptrans-tag-selector-option ${active ? "active" : ""}`}
                     style={{
                       borderColor: active ? `${tag.color}66` : undefined,
                       background: active ? `${tag.color}14` : undefined,
@@ -1312,7 +1312,7 @@ function MainApp() {
                   >
                     {active ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
                     <span>#{tag.name}</span>
-                    {tag.common && <Star className="easycp-tag-selector-star h-3 w-3" style={{ color: tag.color }} />}
+                    {tag.common && <Star className="eacptrans-tag-selector-star h-3 w-3" style={{ color: tag.color }} />}
                   </button>
                 );
               })
@@ -1324,10 +1324,10 @@ function MainApp() {
       <ErrorBanner message={errorMsg} />
 
       <main
-        className={`easycp-main ${
+        className={`eacptrans-main ${
           activeView === "settings" || activeView === "tag-manager"
-            ? "easycp-main-settings"
-            : "easycp-main-cards"
+            ? "eacptrans-main-settings"
+            : "eacptrans-main-cards"
         }`}
       >
         {activeView === "settings" ? (
@@ -1351,12 +1351,12 @@ function MainApp() {
         ) : (
           <div
             ref={cardStripRef}
-            className="easycp-card-strip"
+            className="eacptrans-card-strip"
             id="card-scroll"
             style={{ ["--card-rows" as string]: String(cardRows) }}
           >
             {page > 0 && (
-              <button className="easycp-page-card" onClick={() => handlePageChange(page - 1)}>
+              <button className="eacptrans-page-card" onClick={() => handlePageChange(page - 1)}>
                 <Ellipsis className="h-8 w-8" />
                 <span>Load previous</span>
                 <small>
@@ -1390,7 +1390,7 @@ function MainApp() {
                 />
               ))}
             {page < totalPages - 1 && (
-              <button className="easycp-page-card" onClick={() => handlePageChange(page + 1)}>
+              <button className="eacptrans-page-card" onClick={() => handlePageChange(page + 1)}>
                 <Ellipsis className="h-8 w-8" />
                 <span>Load next</span>
                 <small>

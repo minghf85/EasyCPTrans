@@ -180,3 +180,8 @@ pnpm tauri build
 - `ECDICT/` 包含大型词典数据和生成数据库，默认被 `.gitignore` 忽略。
 - 快捷键可能与系统或其他应用冲突，可在设置页修改。
 - 当前主要面向 Windows；其他平台需要额外适配剪切板、快捷键和窗口行为。
+
+## 致谢
+
+- [tauri-plugin-clipboard-x](https://github.com/ayangweb/tauri-plugin-clipboard-x)
+- [ECDICT](https://github.com/skywind3000/ECDICT)

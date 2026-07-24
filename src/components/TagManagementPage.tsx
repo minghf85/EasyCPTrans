@@ -68,10 +68,10 @@ export function TagManagementPage({
   };
 
   return (
-    <div className="easycp-settings-page">
-      <div className="easycp-settings-grid">
-        <section className="easycp-settings-card easycp-settings-card-wide">
-          <div className="easycp-settings-head">
+    <div className="eacptrans-settings-page">
+      <div className="eacptrans-settings-grid">
+        <section className="eacptrans-settings-card eacptrans-settings-card-wide">
+          <div className="eacptrans-settings-head">
             <h2>
               <Tag className="h-4 w-4" />
               Tag Management
@@ -79,27 +79,27 @@ export function TagManagementPage({
             <p>Create reusable tags for filtering and quick assignment.</p>
           </div>
 
-          <div className="easycp-field">
+          <div className="eacptrans-field">
             <span>New Tag</span>
-            <div className="easycp-tag-manage-create">
+            <div className="eacptrans-tag-manage-create">
               <input
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 placeholder="Enter tag name"
                 disabled={busy}
               />
-              <button className="easycp-primary-btn" onClick={() => void handleCreate()} disabled={busy || !draft.trim()}>
+              <button className="eacptrans-primary-btn" onClick={() => void handleCreate()} disabled={busy || !draft.trim()}>
                 <Plus className="h-4 w-4" />
                 Add tag
               </button>
             </div>
           </div>
 
-          {message && <span className="easycp-settings-msg">{message}</span>}
+          {message && <span className="eacptrans-settings-msg">{message}</span>}
         </section>
 
-        <section className="easycp-settings-card easycp-settings-card-wide">
-          <div className="easycp-settings-head">
+        <section className="eacptrans-settings-card eacptrans-settings-card-wide">
+          <div className="eacptrans-settings-head">
             <h2>
               <Tag className="h-4 w-4" />
               Existing Tags
@@ -107,23 +107,23 @@ export function TagManagementPage({
             <p>Renaming or deleting a tag updates all matching clipboard items.</p>
           </div>
 
-          <div className="easycp-tag-manage-list">
+          <div className="eacptrans-tag-manage-list">
             {sortedTags.length === 0 ? (
-              <div className="easycp-tag-manage-empty">No tags yet.</div>
+              <div className="eacptrans-tag-manage-empty">No tags yet.</div>
             ) : (
               sortedTags.map((tag) => {
                 const count = tagCounts.get(tag.name) ?? 0;
                 const editing = editingTag === tag.name;
                 return (
-                  <div key={tag.name} className="easycp-tag-manage-row">
-                    <div className="easycp-tag-manage-meta">
-                      <span className="easycp-tag-manage-pill" style={{ background: `${tag.color}18`, color: tag.color }}>
+                  <div key={tag.name} className="eacptrans-tag-manage-row">
+                    <div className="eacptrans-tag-manage-meta">
+                      <span className="eacptrans-tag-manage-pill" style={{ background: `${tag.color}18`, color: tag.color }}>
                         #{tag.name}
                       </span>
                       <small>{count} items · {tag.common ? "Common" : "Hidden from tabs"}</small>
                     </div>
                     {editing ? (
-                      <div className="easycp-tag-manage-actions">
+                      <div className="eacptrans-tag-manage-actions">
                         <input
                           value={editingValue}
                           onChange={(event) => setEditingValue(event.target.value)}
@@ -136,17 +136,17 @@ export function TagManagementPage({
                           }}
                           disabled={busy}
                         />
-                        <button className="easycp-primary-btn" onClick={() => void handleRename()} disabled={busy || !editingValue.trim()}>
+                        <button className="eacptrans-primary-btn" onClick={() => void handleRename()} disabled={busy || !editingValue.trim()}>
                           Save
                         </button>
                       </div>
                     ) : (
-                      <div className="easycp-tag-manage-actions">
-                        <button className="easycp-secondary-btn" onClick={() => void onToggleCommon(tag.name)} disabled={busy}>
+                      <div className="eacptrans-tag-manage-actions">
+                        <button className="eacptrans-secondary-btn" onClick={() => void onToggleCommon(tag.name)} disabled={busy}>
                           <Star className="h-4 w-4" />
                           {tag.common ? "Common" : "Make common"}
                         </button>
-                        <label className="easycp-tag-color-picker">
+                        <label className="eacptrans-tag-color-picker">
                           <input
                             type="color"
                             value={tag.color}
@@ -156,7 +156,7 @@ export function TagManagementPage({
                           <span>{tag.color}</span>
                         </label>
                         <button
-                          className="easycp-secondary-btn"
+                          className="eacptrans-secondary-btn"
                           onClick={() => {
                             setEditingTag(tag.name);
                             setEditingValue(tag.name);
@@ -167,7 +167,7 @@ export function TagManagementPage({
                           Rename
                         </button>
                         {!tag.system && (
-                          <button className="easycp-secondary-btn" onClick={() => void onDelete(tag.name)} disabled={busy}>
+                          <button className="eacptrans-secondary-btn" onClick={() => void onDelete(tag.name)} disabled={busy}>
                             <Trash2 className="h-4 w-4" />
                             Delete
                           </button>

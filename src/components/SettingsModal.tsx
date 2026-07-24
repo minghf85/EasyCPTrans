@@ -209,10 +209,10 @@ function ShortcutRecorder({
   }, [recording, allowModifierOnly, onChange, checkAvailability, draftValue, value]);
 
   return (
-    <div className="easycp-field" ref={rootRef}>
+    <div className="eacptrans-field" ref={rootRef}>
       <span>{label}</span>
-      <div className="easycp-shortcut-recorder">
-        <div className={`easycp-shortcut-display ${recording ? "recording" : ""}`}>
+      <div className="eacptrans-shortcut-recorder">
+        <div className={`eacptrans-shortcut-display ${recording ? "recording" : ""}`}>
           {recording
             ? allowModifierOnly
               ? draftValue || "Press modifier keys, then Enter..."
@@ -221,7 +221,7 @@ function ShortcutRecorder({
         </div>
         <button
           type="button"
-          className="easycp-secondary-btn"
+          className="eacptrans-secondary-btn"
           onClick={() => {
             setDraftValue("");
             setStatus("");
@@ -232,14 +232,14 @@ function ShortcutRecorder({
         </button>
         <button
           type="button"
-          className="easycp-secondary-btn"
+          className="eacptrans-secondary-btn"
           onClick={() => onChange("")}
         >
           Clear
         </button>
         <button
           type="button"
-          className="easycp-secondary-btn"
+          className="eacptrans-secondary-btn"
           onClick={() => onChange(defaultValue)}
         >
           Default
@@ -561,17 +561,17 @@ export function SettingsModal({ onSaved }: Props) {
   };
 
   return (
-    <div className="easycp-settings-page">
-      <div className="easycp-settings-grid">
-        <section className="easycp-settings-card">
-          <div className="easycp-settings-head">
+    <div className="eacptrans-settings-page">
+      <div className="eacptrans-settings-grid">
+        <section className="eacptrans-settings-card">
+          <div className="eacptrans-settings-head">
             <h2>General</h2>
             <p>Current-stage clipboard basics for Windows, offline and lightweight.</p>
           </div>
 
-          <label className="easycp-field">
+          <label className="eacptrans-field">
             <span>Data path</span>
-            <div className="easycp-path-row">
+            <div className="eacptrans-path-row">
               <input
                 type="text"
                 value={cachePath}
@@ -580,7 +580,7 @@ export function SettingsModal({ onSaved }: Props) {
               />
               <button
                 type="button"
-                className="easycp-icon-btn"
+                className="eacptrans-icon-btn"
                 onClick={async () => {
                   const selected = await open({ directory: true, multiple: false });
                   if (selected && typeof selected === "string") setCachePath(selected);
@@ -670,9 +670,9 @@ export function SettingsModal({ onSaved }: Props) {
             help="When the window is pinned on top, delete the selected item."
           />
 
-          <label className="easycp-field">
+          <label className="eacptrans-field">
             <span>ECDICT path</span>
-            <div className="easycp-path-row">
+            <div className="eacptrans-path-row">
               <input
                 type="text"
                 value={ecdictPath}
@@ -681,7 +681,7 @@ export function SettingsModal({ onSaved }: Props) {
               />
               <button
                 type="button"
-                className="easycp-icon-btn"
+                className="eacptrans-icon-btn"
                 onClick={async () => {
                   const selected = await open({ directory: false, multiple: false });
                   if (selected && typeof selected === "string") setEcdictPath(selected);
@@ -693,20 +693,20 @@ export function SettingsModal({ onSaved }: Props) {
             </div>
             <small>Supports ECDICT sqlite files first, with CSV fallback for local development.</small>
           </label>
-          {quickPastePrefixWarning && <div className="easycp-settings-msg">{quickPastePrefixWarning}</div>}
+          {quickPastePrefixWarning && <div className="eacptrans-settings-msg">{quickPastePrefixWarning}</div>}
 
-          <label className="easycp-checkrow">
+          <label className="eacptrans-checkrow">
             <input type="checkbox" checked={autoPaste} onChange={(e) => setAutoPaste(e.target.checked)} />
             <span>Auto paste after selecting a clipboard item</span>
           </label>
 
-          <label className="easycp-checkrow">
+          <label className="eacptrans-checkrow">
             <input type="checkbox" checked={alwaysOnTop} onChange={(e) => setAlwaysOnTop(e.target.checked)} />
             <span>Keep window always on top</span>
           </label>
 
-          <div className="easycp-settings-cols">
-            <label className="easycp-field">
+          <div className="eacptrans-settings-cols">
+            <label className="eacptrans-field">
               <span>Page size</span>
               <input
                 type="number"
@@ -717,7 +717,7 @@ export function SettingsModal({ onSaved }: Props) {
               />
             </label>
 
-            <label className="easycp-field">
+            <label className="eacptrans-field">
               <span>History limit</span>
               <input
                 type="number"
@@ -730,16 +730,16 @@ export function SettingsModal({ onSaved }: Props) {
             </label>
           </div>
 
-          <div className="easycp-settings-actions">
-            <button type="button" className="easycp-primary-btn" onClick={() => void handleSave()} disabled={saving}>
+          <div className="eacptrans-settings-actions">
+            <button type="button" className="eacptrans-primary-btn" onClick={() => void handleSave()} disabled={saving}>
               {saving ? "Saving..." : "Save settings"}
             </button>
-            {message && <span className="easycp-settings-msg">{message}</span>}
+            {message && <span className="eacptrans-settings-msg">{message}</span>}
           </div>
         </section>
 
-        <section className="easycp-settings-card">
-          <div className="easycp-settings-head">
+        <section className="eacptrans-settings-card">
+          <div className="eacptrans-settings-head">
             <h2>
               <Cloud className="h-4 w-4" />
               WebDAV
@@ -747,7 +747,7 @@ export function SettingsModal({ onSaved }: Props) {
             <p>Preserve and migrate older synchronized clipboard history into the current local database.</p>
           </div>
 
-          <label className="easycp-checkrow">
+          <label className="eacptrans-checkrow">
             <input
               type="checkbox"
               checked={webdavSyncEnabled}
@@ -756,7 +756,7 @@ export function SettingsModal({ onSaved }: Props) {
             <span>Enable WebDAV sync and migration</span>
           </label>
 
-          <label className="easycp-field">
+          <label className="eacptrans-field">
             <span>WebDAV URL</span>
             <input
               type="text"
@@ -766,12 +766,12 @@ export function SettingsModal({ onSaved }: Props) {
             />
           </label>
 
-          <label className="easycp-field">
+          <label className="eacptrans-field">
             <span>Username</span>
             <input type="text" value={webdavUsername} onChange={(e) => setWebdavUsername(e.target.value)} />
           </label>
 
-          <label className="easycp-field">
+          <label className="eacptrans-field">
             <span>Password</span>
             <input
               type="password"
@@ -781,15 +781,15 @@ export function SettingsModal({ onSaved }: Props) {
             />
           </label>
 
-          <label className="easycp-field">
+          <label className="eacptrans-field">
             <span>Device name</span>
             <input type="text" value={deviceName} onChange={(e) => setDeviceName(e.target.value)} />
           </label>
 
-          <div className="easycp-settings-actions">
+          <div className="eacptrans-settings-actions">
             <button
               type="button"
-              className="easycp-secondary-btn"
+              className="eacptrans-secondary-btn"
               onClick={() => void handleVerifyWebdav()}
               disabled={webdavBusy || !webdavUrl.trim() || !webdavUsername.trim()}
             >
@@ -797,7 +797,7 @@ export function SettingsModal({ onSaved }: Props) {
             </button>
             <button
               type="button"
-              className="easycp-primary-btn"
+              className="eacptrans-primary-btn"
               onClick={() => void handleSyncNow()}
               disabled={webdavBusy || !webdavSyncEnabled || !webdavUrl.trim() || !webdavUsername.trim()}
             >
@@ -805,11 +805,11 @@ export function SettingsModal({ onSaved }: Props) {
               {webdavBusy ? "Syncing..." : "Sync now"}
             </button>
           </div>
-          {webdavMessage && <span className="easycp-settings-msg">{webdavMessage}</span>}
+          {webdavMessage && <span className="eacptrans-settings-msg">{webdavMessage}</span>}
         </section>
 
-        <section className="easycp-settings-card easycp-settings-card-wide">
-          <div className="easycp-settings-head">
+        <section className="eacptrans-settings-card eacptrans-settings-card-wide">
+          <div className="eacptrans-settings-head">
             <h2>
               <Shield className="h-4 w-4" />
               Privacy
@@ -822,46 +822,46 @@ export function SettingsModal({ onSaved }: Props) {
           </div>
 
           {privacyStatus.passwordSet && (
-            <label className="easycp-field">
+            <label className="eacptrans-field">
               <span>Current password</span>
               <input type="password" value={privacyCurrent} onChange={(e) => setPrivacyCurrent(e.target.value)} />
             </label>
           )}
 
-          <div className="easycp-settings-cols">
-            <label className="easycp-field">
+          <div className="eacptrans-settings-cols">
+            <label className="eacptrans-field">
               <span>New password</span>
               <input type="password" value={privacyNew} onChange={(e) => setPrivacyNew(e.target.value)} />
             </label>
 
-            <label className="easycp-field">
+            <label className="eacptrans-field">
               <span>Confirm password</span>
               <input type="password" value={privacyConfirm} onChange={(e) => setPrivacyConfirm(e.target.value)} />
             </label>
           </div>
 
-          <div className="easycp-settings-cols">
-            <label className="easycp-field">
+          <div className="eacptrans-settings-cols">
+            <label className="eacptrans-field">
               <span>Security question</span>
               <input type="text" value={securityQuestion} onChange={(e) => setSecurityQuestion(e.target.value)} />
             </label>
 
-            <label className="easycp-field">
+            <label className="eacptrans-field">
               <span>Security answer</span>
               <input type="password" value={securityAnswer} onChange={(e) => setSecurityAnswer(e.target.value)} />
             </label>
           </div>
 
-          <div className="easycp-settings-actions">
+          <div className="eacptrans-settings-actions">
             <button
               type="button"
-              className="easycp-primary-btn"
+              className="eacptrans-primary-btn"
               onClick={() => void handleSetPrivacyPassword()}
               disabled={privacyBusy}
             >
               {privacyBusy ? "Saving..." : "Save privacy settings"}
             </button>
-            {privacyMessage && <span className="easycp-settings-msg">{privacyMessage}</span>}
+            {privacyMessage && <span className="eacptrans-settings-msg">{privacyMessage}</span>}
           </div>
         </section>
       </div>
