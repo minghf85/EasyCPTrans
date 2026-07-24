@@ -1,6 +1,6 @@
 [package]
 name = "easycptrans"
-version = "0.1.0"
+version = "0.1.1"
 description = "EasyCPTrans clipboard utility"
 authors = ["you"]
 edition = "2021"
