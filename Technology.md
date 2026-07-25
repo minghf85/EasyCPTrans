@@ -111,6 +111,37 @@ Tag Admin 管理的是 `managedTags` 配置：
 - `Private` 按 `is_private` 匹配
 - 普通 Tag 按 `item.tags` 匹配
 
+### 时间范围搜索
+
+搜索解析同样位于 `src/lib/filter.ts`。
+
+支持字段：
+
+- `after:` / `since:`：开始时间
+- `before:` / `until:`：结束时间
+- `date:`：日期或日期范围
+- `time:`：具体时间或具体时间范围
+- `created:`：等价于按创建时间范围筛选
+
+示例：
+
+```text
+date:2026-07-25
+date:2026-07-01..2026-07-25
+date:2026-07-01..
+date:..2026-07-25
+time:"2026-07-25 09:00..2026-07-25 18:30"
+time:2026-07-25T09:00..2026-07-25T18:30
+```
+
+实现规则：
+
+- `date:YYYY-MM-DD` 会展开为当天完整范围
+- 带具体时间的值按精确时间戳处理
+- 范围分隔符支持 `..` 和 `~`
+- 搜索条件最终合并到 `ParsedSearchQuery.after` / `ParsedSearchQuery.before`
+- 多个时间条件同时存在时取交集
+
 ## 前端 API 封装
 
 主要封装位于 `src/lib/api.ts`。
@@ -375,4 +406,3 @@ Windows 产物默认输出：
 src-tauri/target/release/bundle/msi/
 src-tauri/target/release/bundle/nsis/
 ```
-

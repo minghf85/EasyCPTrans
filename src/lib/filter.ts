@@ -154,6 +154,10 @@ function endOfDay(value: Date) {
   return startOfDay(value) + 24 * 3600 * 1000 - 1;
 }
 
+function hasExplicitTime(raw: string) {
+  return /(?:t|\s)\d{1,2}:\d{2}/i.test(raw.trim());
+}
+
 function parseDateValue(raw: string): { after?: number; before?: number } | null {
   const value = raw.trim().toLowerCase();
   const now = new Date();
@@ -180,7 +184,29 @@ function parseDateValue(raw: string): { after?: number; before?: number } | null
 
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) return null;
+  if (hasExplicitTime(raw)) return { after: parsed.getTime(), before: parsed.getTime() };
   return { after: startOfDay(parsed), before: endOfDay(parsed) };
+}
+
+function parseDateRangeValue(raw: string): { after?: number; before?: number } | null {
+  const value = raw.trim();
+  if (!value) return null;
+
+  const rangeSeparator = value.includes("..") ? ".." : value.includes("~") ? "~" : null;
+  if (!rangeSeparator) return parseDateValue(value);
+
+  const [startRaw, endRaw] = value.split(rangeSeparator, 2).map((part) => part.trim());
+  if (!startRaw && !endRaw) return null;
+
+  const start = startRaw ? parseDateValue(startRaw) : null;
+  const end = endRaw ? parseDateValue(endRaw) : null;
+  if (startRaw && !start) return null;
+  if (endRaw && !end) return null;
+
+  return {
+    after: start?.after,
+    before: end?.before,
+  };
 }
 
 function pushChip(target: string[], enabled: boolean, label: string) {
@@ -281,6 +307,20 @@ function parseSearchQuery(query: string): ParsedSearchQuery {
           if (date?.before !== undefined) {
             parsed.before = parsed.before === null ? date.before : Math.min(parsed.before, date.before);
             parsed.chips.push(`before:${value}`);
+            continue;
+          }
+        }
+
+        if (field === "date" || field === "time" || field === "created") {
+          const dateRange = parseDateRangeValue(value);
+          if (dateRange) {
+            if (dateRange.after !== undefined) {
+              parsed.after = parsed.after === null ? dateRange.after : Math.max(parsed.after, dateRange.after);
+            }
+            if (dateRange.before !== undefined) {
+              parsed.before = parsed.before === null ? dateRange.before : Math.min(parsed.before, dateRange.before);
+            }
+            parsed.chips.push(`${field}:${value}`);
             continue;
           }
         }
