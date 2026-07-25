@@ -266,6 +266,7 @@ pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfi
         item_pin_shortcut: default_item_pin_shortcut(),
         item_delete_shortcut: default_item_delete_shortcut(),
         ecdict_path: String::new(),
+        locale: default_locale(),
         auto_paste: true,
         keep_window_open: false,
         always_on_top: false,
@@ -2069,6 +2070,8 @@ pub struct AppConfig {
     pub item_delete_shortcut: String,
     #[serde(default)]
     pub ecdict_path: String,
+    #[serde(default = "default_locale")]
+    pub locale: String,
     #[serde(default = "default_auto_paste")]
     pub auto_paste: bool,
     #[serde(default = "default_keep_window_open")]
@@ -2130,6 +2133,9 @@ fn default_item_pin_shortcut() -> String {
 }
 fn default_item_delete_shortcut() -> String {
     "Delete".to_string()
+}
+fn default_locale() -> String {
+    "zh-CN".to_string()
 }
 fn default_keep_window_open() -> bool {
     false
@@ -2235,6 +2241,7 @@ pub struct ConfigResponse {
     pub item_pin_shortcut: String,
     pub item_delete_shortcut: String,
     pub ecdict_path: String,
+    pub locale: String,
     pub default_dir: String,
     pub effective_dir: String,
     pub auto_paste: bool,
@@ -2269,6 +2276,7 @@ pub struct PartialAppConfig {
     pub item_pin_shortcut: Option<String>,
     pub item_delete_shortcut: Option<String>,
     pub ecdict_path: Option<String>,
+    pub locale: Option<String>,
     pub auto_paste: Option<bool>,
     pub keep_window_open: Option<bool>,
     pub always_on_top: Option<bool>,
@@ -2311,6 +2319,7 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
         item_pin_shortcut: conf.item_pin_shortcut,
         item_delete_shortcut: conf.item_delete_shortcut,
         ecdict_path: conf.ecdict_path,
+        locale: conf.locale,
         default_dir,
         effective_dir,
         auto_paste: conf.auto_paste,
@@ -2372,6 +2381,12 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
     }
     if let Some(value) = config.ecdict_path {
         merged.ecdict_path = value;
+    }
+    if let Some(value) = config.locale {
+        merged.locale = match value.as_str() {
+            "zh-TW" | "en" => value,
+            _ => default_locale(),
+        };
     }
     if let Some(value) = config.auto_paste {
         merged.auto_paste = value;

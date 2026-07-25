@@ -46,6 +46,7 @@ fn parse_config(app: &AppHandle) -> Result<AppConfig, String> {
                 item_pin_shortcut: "P".to_string(),
                 item_delete_shortcut: "Delete".to_string(),
                 ecdict_path: "".to_string(),
+                locale: "zh-CN".to_string(),
                 auto_paste: true,
                 keep_window_open: false,
                 always_on_top: false,

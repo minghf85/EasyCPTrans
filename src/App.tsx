@@ -35,6 +35,7 @@ import { TagManagementPage } from "./components/TagManagementPage";
 import { resetClipboardStack, useClipboardWatcher, setInjectedOverrideSig } from "./hooks/useClipboardWatcher";
 import { useHistory } from "./hooks/useHistory";
 import { api } from "./lib/api";
+import { normalizeLocale, tr, type Locale } from "./lib/i18n";
 import {
   aggregateTags,
   applyFilters,
@@ -67,14 +68,6 @@ const FUNCTIONAL_TAGS: ManagedTag[] = [
 ];
 const LEGACY_SYSTEM_TAG_IDS = new Set(["sys-url", "sys-code"]);
 const LEGACY_SYSTEM_TAG_NAMES = new Set(["important", "links", "code"]);
-const BASE_TAB_LIST: Array<{
-  key: Scope;
-  label: string;
-  dotClass: string;
-  icon: typeof FileText;
-}> = [
-  { key: "all", label: "All", dotClass: "dot-all", icon: FileText },
-];
 
 type ActiveView = Scope | "tag-selector" | "tag-manager" | "settings" | `tag:${string}`;
 
@@ -202,6 +195,7 @@ function MainApp() {
   const [itemPrivateShortcut, setItemPrivateShortcut] = useState(DEFAULT_ITEM_PRIVATE_SHORTCUT);
   const [itemPinShortcut, setItemPinShortcut] = useState(DEFAULT_ITEM_PIN_SHORTCUT);
   const [itemDeleteShortcut, setItemDeleteShortcut] = useState(DEFAULT_ITEM_DELETE_SHORTCUT);
+  const [locale, setLocale] = useState<Locale>("zh-CN");
   const [pageSize, setPageSize] = useState(50);
   const [historyLimit, setHistoryLimit] = useState(5000);
   const [managedTags, setManagedTags] = useState<ManagedTag[]>([]);
@@ -247,6 +241,7 @@ function MainApp() {
         const nextItemPrivateShortcut = normalizeShortcutValue(cfg.itemPrivateShortcut, DEFAULT_ITEM_PRIVATE_SHORTCUT);
         const nextItemPinShortcut = normalizeShortcutValue(cfg.itemPinShortcut, DEFAULT_ITEM_PIN_SHORTCUT);
         const nextItemDeleteShortcut = normalizeShortcutValue(cfg.itemDeleteShortcut, DEFAULT_ITEM_DELETE_SHORTCUT);
+        setLocale(normalizeLocale(cfg.locale));
         if (
           nextShortcut !== (cfg.shortcut ?? "") ||
           nextQueueStepShortcut !== (cfg.queueStepShortcut ?? "") ||
@@ -380,7 +375,16 @@ function MainApp() {
       return current.common
         ? {
             key: systemTag.key,
-            label: current.name,
+            label:
+              systemTag.key === "text"
+                ? tr(locale, "text")
+                : systemTag.key === "image"
+                  ? tr(locale, "image")
+                  : systemTag.key === "file"
+                    ? tr(locale, "file")
+                    : systemTag.key === "pinned"
+                      ? tr(locale, "pinned")
+                      : current.name,
             dotClass: "dot-tag",
             icon:
               systemTag.key === "image"
@@ -422,18 +426,35 @@ function MainApp() {
         dotClass: "dot-tag",
         icon: Tags,
       }));
+    const baseTabs: Array<{
+      key: Scope;
+      label: string;
+      dotClass: string;
+      icon: typeof FileText;
+    }> = [{ key: "all", label: tr(locale, "all"), dotClass: "dot-all", icon: FileText }];
     return [
-      ...BASE_TAB_LIST,
+      ...baseTabs,
       ...systemTabs,
       ...deviceTabs,
       ...functionalTabs,
       ...customCommonTabs,
-      { key: "tag-selector" as const, label: "Tags", dotClass: "dot-tag", icon: Tags },
-      { key: "tag-manager" as const, label: "Tag Admin", dotClass: "dot-tag", icon: Tags },
-      { key: "settings" as const, label: "Settings", dotClass: "dot-settings", icon: Settings2 },
+      { key: "tag-selector" as const, label: tr(locale, "tags"), dotClass: "dot-tag", icon: Tags },
+      { key: "tag-manager" as const, label: tr(locale, "tagAdmin"), dotClass: "dot-tag", icon: Tags },
+      { key: "settings" as const, label: tr(locale, "settings"), dotClass: "dot-settings", icon: Settings2 },
     ];
-  }, [allKnownTags, sourceHistory]);
+  }, [allKnownTags, sourceHistory, locale]);
   const selectableTags = useMemo(
+    () =>
+      [...allKnownTags].sort(
+        (a, b) =>
+          Number(Boolean(b.system)) - Number(Boolean(a.system)) ||
+          Number(Boolean(b.common)) - Number(Boolean(a.common)) ||
+          (tagCountMap.get(b.name) ?? 0) - (tagCountMap.get(a.name) ?? 0) ||
+          a.name.localeCompare(b.name),
+      ),
+    [allKnownTags, tagCountMap],
+  );
+  const assignableTags = useMemo(
     () => allKnownTags.filter((tag) => !tag.system),
     [allKnownTags],
   );
@@ -641,11 +662,6 @@ function MainApp() {
   const toggleTag = (tag: string) => {
     setActiveTags((prev) => {
       if (prev.includes(tag)) return prev.filter((t) => t !== tag);
-      if (prev.length === 1) {
-        const active = prev[0];
-        const count = tagCountMap.get(active) ?? 0;
-        if (active !== tag && count <= 1) return [tag];
-      }
       return [...prev, tag];
     });
   };
@@ -852,7 +868,9 @@ function MainApp() {
     webdavUsername: string;
     webdavSyncEnabled: boolean;
     deviceName: string;
+    locale: Locale;
   }) => {
+    setLocale(settings.locale);
     setAutoPaste(settings.autoPaste);
     setKeepWindowOpen(settings.keepWindowOpen);
     setAlwaysOnTop(settings.alwaysOnTop);
@@ -1313,7 +1331,7 @@ function MainApp() {
       <section className="eacptrans-toolbar">
           <button
             className="eacptrans-icon-btn eacptrans-drag-handle-btn"
-            title="Drag window"
+            title={tr(locale, "dragWindow")}
             onMouseDown={(event) => {
               event.preventDefault();
               edgeInteractingRef.current = true;
@@ -1326,7 +1344,7 @@ function MainApp() {
 
           <button
             className={`eacptrans-icon-btn ${alwaysOnTop ? "active" : ""}`}
-            title={alwaysOnTop ? "Unpin window" : "Pin window on top"}
+            title={alwaysOnTop ? tr(locale, "unpinWindow") : tr(locale, "pinWindow")}
             onClick={() => {
               const next = !alwaysOnTop;
               setAlwaysOnTop(next);
@@ -1339,7 +1357,7 @@ function MainApp() {
           <div className="eacptrans-search-wrap">
             <button
               className="eacptrans-search-btn"
-              title="Search (supports tag/app/type/date/size syntax)"
+              title={`${tr(locale, "search")} (tag/app/type/date/size)`}
               onClick={() => {
                 const next = !searchOpen;
                 setSearchOpen(next);
@@ -1403,7 +1421,7 @@ function MainApp() {
                   {key === "tag-selector" && tagSelectorOpen && (
                     <div className="eacptrans-tag-inline-list">
                       {selectableTags.length === 0 ? (
-                        <span className="eacptrans-tag-inline-empty">No tags</span>
+                        <span className="eacptrans-tag-inline-empty">{tr(locale, "noTagsInline")}</span>
                       ) : (
                         selectableTags.map((tag) => {
                           const tagActive = activeTags.includes(tag.name);
@@ -1446,7 +1464,7 @@ function MainApp() {
         }`}
       >
         {activeView === "settings" ? (
-          <SettingsModal ref={settingsModalRef} onSaved={handleSettingsSaved} />
+          <SettingsModal ref={settingsModalRef} locale={locale} onSaved={handleSettingsSaved} />
         ) : activeView === "tag-manager" ? (
           <TagManagementPage
             tags={allKnownTags}
@@ -1457,9 +1475,11 @@ function MainApp() {
             onDelete={handleDeleteManagedTag}
             onToggleCommon={handleToggleManagedTagCommon}
             onSetColor={handleSetManagedTagColor}
+            locale={locale}
           />
         ) : filtered.length === 0 ? (
           <EmptyState
+            locale={locale}
             filtered={hasFilters && sourceHistory.length > 0}
             onClear={hasFilters ? clearFilters : undefined}
           />
@@ -1473,7 +1493,7 @@ function MainApp() {
             {page > 0 && (
               <button className="eacptrans-page-card" onClick={() => handlePageChange(page - 1)}>
                 <Ellipsis className="h-8 w-8" />
-                <span>Load previous</span>
+                <span>{tr(locale, "loadPrevious")}</span>
                 <small>
                   {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, filtered.length)}
                 </small>
@@ -1483,7 +1503,7 @@ function MainApp() {
                 <ClipboardCard
                   key={item.id}
                   item={item}
-                  availableTags={selectableTags.map((tag) => tag.name)}
+                  availableTags={assignableTags.map((tag) => tag.name)}
                   tagColors={tagColorMap}
                   isSelected={selectedId === item.id}
                   isCopied={copiedId === item.id}

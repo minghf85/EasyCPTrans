@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { HistoryItem, IngestResult, ManagedTag } from "../types";
+import type { Locale } from "./i18n";
 
 // 单一入口封装所有 Rust 命令调用，方便集中替换/Mock。
 export const api = {
@@ -96,6 +97,7 @@ export const api = {
       itemPinShortcut?: string;
       itemDeleteShortcut?: string;
       ecdictPath?: string;
+      locale?: Locale;
       defaultDir: string;
       effectiveDir: string;
       autoPaste: boolean;
@@ -127,6 +129,7 @@ export const api = {
     itemPinShortcut?: string;
     itemDeleteShortcut?: string;
     ecdictPath?: string;
+    locale?: Locale;
     autoPaste?: boolean;
     keepWindowOpen?: boolean;
     alwaysOnTop?: boolean;

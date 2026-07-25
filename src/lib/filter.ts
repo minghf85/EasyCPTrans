@@ -339,6 +339,17 @@ export function applyFilters(items: HistoryItem[], filter: FilterState): History
   const parsed = parseSearchQuery(filter.search);
   const tagSet = new Set(filter.activeTags.map((t) => t.toLowerCase()));
 
+  const matchesSelectedTag = (item: HistoryItem, tag: string) => {
+    const normalized = tag.trim().toLowerCase();
+    if (!normalized) return true;
+    if (normalized === "text") return item.contentType === "text";
+    if (normalized === "image") return item.contentType === "image";
+    if (normalized === "file") return item.contentType === "file";
+    if (normalized === "pinned") return item.pinned;
+    if (normalized === "private") return item.isPrivate;
+    return item.tags.some((value) => value.toLowerCase() === normalized);
+  };
+
   return items.filter((item) => {
     if (filter.scope === "pinned" && !item.pinned) return false;
     if (filter.scope === "text" && item.contentType !== "text") return false;
@@ -372,9 +383,8 @@ export function applyFilters(items: HistoryItem[], filter: FilterState): History
     }
 
     if (tagSet.size > 0) {
-      const itemTags = item.tags.map((t) => t.toLowerCase());
       for (const t of tagSet) {
-        if (!itemTags.includes(t)) return false;
+        if (!matchesSelectedTag(item, t)) return false;
       }
     }
 

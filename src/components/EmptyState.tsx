@@ -1,11 +1,13 @@
 import { Clock3, SearchX } from "lucide-react";
+import { tr, type Locale } from "../lib/i18n";
 
 interface Props {
+  locale: Locale;
   filtered?: boolean;
   onClear?: () => void;
 }
 
-export function EmptyState({ filtered, onClear }: Props) {
+export function EmptyState({ locale, filtered, onClear }: Props) {
   return (
     <div className="flex h-full min-h-[220px] flex-col items-center justify-center px-8 text-center">
       <div className="mb-4 rounded-full border border-[#e6e6e6] bg-white p-4 shadow-sm">
@@ -16,7 +18,7 @@ export function EmptyState({ filtered, onClear }: Props) {
         )}
       </div>
       <p className="text-base font-medium text-slate-700">
-        {filtered ? "No matching clipboard items" : "Clipboard history will appear here"}
+        {filtered ? tr(locale, "noMatchingItems") : tr(locale, "historyWillAppear")}
       </p>
       <p className="mt-2 max-w-sm text-sm text-slate-500">
         {filtered
@@ -28,7 +30,7 @@ export function EmptyState({ filtered, onClear }: Props) {
           onClick={onClear}
           className="mt-5 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
         >
-          Clear filters
+          {tr(locale, "clearFilters")}
         </button>
       )}
     </div>

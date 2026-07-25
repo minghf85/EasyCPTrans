@@ -2,8 +2,10 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { Cloud, Folder, RefreshCw, Shield } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
+import { LOCALE_OPTIONS, normalizeLocale, tr, type Locale } from "../lib/i18n";
 
 interface Props {
+  locale: Locale;
   onSaved: (settings: {
     shortcut: string;
     queueStepShortcut: string;
@@ -23,6 +25,7 @@ interface Props {
     webdavUsername: string;
     webdavSyncEnabled: boolean;
     deviceName: string;
+    locale: Locale;
   }) => void;
 }
 
@@ -114,6 +117,7 @@ function ShortcutRecorder({
   onChange,
   checkAvailability,
   help,
+  locale,
   allowModifierOnly = false,
 }: {
   label: string;
@@ -122,13 +126,14 @@ function ShortcutRecorder({
   onChange: (value: string) => void;
   checkAvailability?: (value: string) => Promise<boolean>;
   help: string;
+  locale: Locale;
   allowModifierOnly?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [recording, setRecording] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [draftValue, setDraftValue] = useState("");
-  const displayValue = value.trim() || "Disabled";
+  const displayValue = value.trim() || tr(locale, "shortcutDisabled");
 
   useEffect(() => {
     if (!recording) return;
@@ -138,7 +143,7 @@ function ShortcutRecorder({
 
       if (event.key === "Escape") {
         setDraftValue("");
-        setStatus("Recording cancelled.");
+        setStatus(tr(locale, "shortcutRecordingCancelled"));
         setRecording(false);
         return;
       }
@@ -154,30 +159,30 @@ function ShortcutRecorder({
       if (allowModifierOnly) {
         if (isModifierKey(event.key)) {
           setDraftValue(canonicalizeShortcut(nextValue));
-          setStatus("Press Enter to confirm this modifier prefix.");
+          setStatus(tr(locale, "shortcutConfirmModifier"));
           return;
         }
         if (event.key === "Enter") {
           if (!draftValue.trim()) {
-            setStatus("Press one or more modifier keys first.");
+            setStatus(tr(locale, "shortcutNeedModifierFirst"));
             return;
           }
           onChange(canonicalizeShortcut(draftValue));
           setDraftValue("");
-          setStatus("Recorded. Click the Settings tab again to save.");
+          setStatus(tr(locale, "shortcutRecordedSaveHint"));
           setRecording(false);
           return;
         }
-        setStatus("Quick paste prefix only accepts modifier keys. Press Enter to confirm.");
+        setStatus(tr(locale, "shortcutPrefixOnlyModifiers"));
         return;
       }
 
       if (isModifierKey(event.key)) {
-        setStatus("Press a non-modifier key to finish the shortcut.");
+        setStatus(tr(locale, "shortcutNeedNonModifier"));
         return;
       }
       if (!nextValue.includes("+")) {
-        setStatus("Use at least one modifier key.");
+        setStatus(tr(locale, "shortcutNeedModifier"));
         return;
       }
 
@@ -185,14 +190,14 @@ function ShortcutRecorder({
       if (checkAvailability && canonical !== canonicalizeShortcut(value)) {
         const available = await checkAvailability(canonical).catch(() => false);
         if (!available) {
-          setStatus("Shortcut is already registered. Try another combination.");
+          setStatus(tr(locale, "shortcutAlreadyRegistered"));
           return;
         }
       }
 
       onChange(canonical);
       setDraftValue("");
-      setStatus("Recorded. Click the Settings tab again to save.");
+      setStatus(tr(locale, "shortcutRecordedSaveHint"));
       setRecording(false);
     };
 
@@ -200,7 +205,7 @@ function ShortcutRecorder({
       const target = event.target as Node | null;
       if (target && rootRef.current?.contains(target)) return;
       setDraftValue("");
-      setStatus("Recording cancelled.");
+      setStatus(tr(locale, "shortcutRecordingCancelled"));
       setRecording(false);
     };
 
@@ -210,7 +215,7 @@ function ShortcutRecorder({
       window.removeEventListener("keydown", handleKeyDown, true);
       window.removeEventListener("mousedown", handlePointerDown, true);
     };
-  }, [recording, allowModifierOnly, onChange, checkAvailability, draftValue, value]);
+  }, [recording, allowModifierOnly, onChange, checkAvailability, draftValue, value, locale]);
 
   return (
     <div className="eacptrans-field" ref={rootRef}>
@@ -219,8 +224,8 @@ function ShortcutRecorder({
         <div className={`eacptrans-shortcut-display ${recording ? "recording" : ""}`}>
           {recording
             ? allowModifierOnly
-              ? draftValue || "Press modifier keys, then Enter..."
-              : "Press keys..."
+              ? draftValue || tr(locale, "shortcutPressModifierEnter")
+              : tr(locale, "shortcutPressKeys")
             : displayValue}
         </div>
         <button
@@ -232,21 +237,21 @@ function ShortcutRecorder({
             setRecording((prev) => !prev);
           }}
         >
-          {recording ? "Cancel" : "Record"}
+          {recording ? tr(locale, "shortcutCancel") : tr(locale, "shortcutRecord")}
         </button>
         <button
           type="button"
           className="eacptrans-secondary-btn"
           onClick={() => onChange("")}
         >
-          Clear
+          {tr(locale, "shortcutClear")}
         </button>
         <button
           type="button"
           className="eacptrans-secondary-btn"
           onClick={() => onChange(defaultValue)}
         >
-          Default
+          {tr(locale, "shortcutDefault")}
         </button>
       </div>
       <small>{help}</small>
@@ -255,8 +260,9 @@ function ShortcutRecorder({
   );
 }
 
-export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function SettingsModal({ onSaved }, ref) {
+export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function SettingsModal({ locale, onSaved }, ref) {
   const [cachePath, setCachePath] = useState("");
+  const [selectedLocale, setSelectedLocale] = useState<Locale>(locale);
   const [shortcut, setShortcut] = useState("CommandOrControl+Shift+V");
   const [queueStepShortcut, setQueueStepShortcut] = useState("CommandOrControl+Alt+V");
   const [quickPastePrefix, setQuickPastePrefix] = useState("CommandOrControl+Shift");
@@ -293,8 +299,12 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
   const [privacyMessage, setPrivacyMessage] = useState("");
   const quickPastePrefixWarning =
     /^super$/i.test(quickPastePrefix.trim())
-      ? "Using Win alone as the quick paste modifier is likely to conflict with system shortcuts."
+      ? tr(selectedLocale, "quickPasteWinWarning")
       : "";
+
+  useEffect(() => {
+    setSelectedLocale(locale);
+  }, [locale]);
   const normalizedShortcut = useMemo(
     () => normalizeShortcutValue(shortcut, "CommandOrControl+Shift+V"),
     [shortcut],
@@ -338,6 +348,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
       .then((cfg) => {
         if (!cfg) return;
         setCachePath(cfg.cachePath || "");
+        setSelectedLocale(normalizeLocale(cfg.locale));
         const nextShortcutRaw = normalizeShortcutValue(cfg.shortcut, "CommandOrControl+Shift+V");
         const nextShortcut =
           canonicalizeShortcut(nextShortcutRaw) === "Super+Shift+V"
@@ -409,7 +420,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         setSecurityQuestion(status.securityQuestion || "");
       })
       .catch((err) => {
-        setPrivacyMessage("Failed to load privacy status: " + String(err));
+        setPrivacyMessage(tr(selectedLocale, "privacyLoadFailed") + String(err));
       });
   }, []);
 
@@ -427,6 +438,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         itemPinShortcut: normalizedItemPinShortcut,
         itemDeleteShortcut: normalizedItemDeleteShortcut,
         ecdictPath,
+        locale: selectedLocale,
         autoPaste,
         keepWindowOpen: false,
         alwaysOnTop,
@@ -447,7 +459,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
       if (shouldSavePrivacy) {
         const privacySaved = await handleSetPrivacyPassword();
         if (!privacySaved) {
-          throw new Error("Privacy settings were not saved.");
+          throw new Error(tr(selectedLocale, "privacyNotSaved"));
         }
       }
       onSaved({
@@ -469,6 +481,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         webdavUsername,
         webdavSyncEnabled,
         deviceName,
+        locale: selectedLocale,
       });
       setWebdavPassword("");
       if (shortcutReport.failed.length > 0) {
@@ -488,9 +501,9 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
     setWebdavMessage("");
     try {
       await api.verifyWebdav(webdavUrl.trim(), webdavUsername.trim(), webdavPassword.trim() || undefined);
-      setWebdavMessage("WebDAV connection verified.");
+      setWebdavMessage(tr(selectedLocale, "webdavVerified"));
     } catch (err) {
-      setWebdavMessage("Verification failed: " + String(err));
+      setWebdavMessage(tr(selectedLocale, "webdavVerifyFailed") + String(err));
     } finally {
       setWebdavBusy(false);
     }
@@ -509,9 +522,9 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
       });
       await api.triggerSync();
       setWebdavPassword("");
-      setWebdavMessage("WebDAV sync completed.");
+      setWebdavMessage(tr(selectedLocale, "webdavSynced"));
     } catch (err) {
-      setWebdavMessage("Sync failed: " + String(err));
+      setWebdavMessage(tr(selectedLocale, "webdavSyncFailed") + String(err));
     } finally {
       setWebdavBusy(false);
     }
@@ -523,19 +536,19 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
     const answer = securityAnswer.trim();
 
     if (next.length < 6) {
-      setPrivacyMessage("Privacy password must be at least 6 characters.");
+      setPrivacyMessage(tr(selectedLocale, "privacyPasswordTooShort"));
       return false;
     }
     if (next !== privacyConfirm) {
-      setPrivacyMessage("The two new passwords do not match.");
+      setPrivacyMessage(tr(selectedLocale, "privacyPasswordMismatch"));
       return false;
     }
     if (!question) {
-      setPrivacyMessage("Security question is required.");
+      setPrivacyMessage(tr(selectedLocale, "privacyQuestionRequired"));
       return false;
     }
     if (answer.length < 2) {
-      setPrivacyMessage("Security answer must be at least 2 characters.");
+      setPrivacyMessage(tr(selectedLocale, "privacyAnswerTooShort"));
       return false;
     }
 
@@ -556,10 +569,10 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         passwordSet: true,
         securityQuestionSet: true,
       }));
-      setPrivacyMessage("Privacy settings updated.");
+      setPrivacyMessage(tr(selectedLocale, "privacyUpdated"));
       return true;
     } catch (err) {
-      setPrivacyMessage("Failed to update privacy settings: " + String(err));
+      setPrivacyMessage(tr(selectedLocale, "privacyUpdateFailed") + String(err));
       return false;
     }
   };
@@ -571,18 +584,32 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
       <div className="eacptrans-settings-grid">
         <section className="eacptrans-settings-card">
           <div className="eacptrans-settings-head">
-            <h2>General</h2>
-            <p>Current-stage clipboard basics for Windows, offline and lightweight.</p>
+            <h2>{tr(selectedLocale, "settingsGeneral")}</h2>
+            <p>{tr(selectedLocale, "settingsGeneralDesc")}</p>
           </div>
 
           <label className="eacptrans-field">
-            <span>Data path</span>
+            <span>{tr(selectedLocale, "language")}</span>
+            <select
+              value={selectedLocale}
+              onChange={(event) => setSelectedLocale(normalizeLocale(event.target.value))}
+            >
+              {LOCALE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="eacptrans-field">
+            <span>{tr(selectedLocale, "dataPath")}</span>
             <div className="eacptrans-path-row">
               <input
                 type="text"
                 value={cachePath}
                 onChange={(e) => setCachePath(e.target.value)}
-                placeholder="Use the default app data directory"
+                placeholder={tr(selectedLocale, "dataPathPlaceholder")}
               />
               <button
                 type="button"
@@ -591,17 +618,17 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
                   const selected = await open({ directory: true, multiple: false });
                   if (selected && typeof selected === "string") setCachePath(selected);
                 }}
-                title="Choose folder"
+                title={tr(selectedLocale, "chooseFolder")}
               >
                 <Folder className="h-4 w-4" />
               </button>
             </div>
-            {effectiveDir && <small>Current path: {effectiveDir}</small>}
+            {effectiveDir && <small>{tr(selectedLocale, "currentPath")}: {effectiveDir}</small>}
           </label>
 
           <div className="eacptrans-settings-cols">
             <label className="eacptrans-field">
-              <span>Page size</span>
+              <span>{tr(selectedLocale, "pageSize")}</span>
               <input
                 type="number"
                 min="10"
@@ -612,7 +639,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
             </label>
 
             <label className="eacptrans-field">
-              <span>History limit</span>
+              <span>{tr(selectedLocale, "historyLimit")}</span>
               <input
                 type="number"
                 min="100"
@@ -628,53 +655,58 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
 
         <section className="eacptrans-settings-card">
           <div className="eacptrans-settings-head">
-            <h2>Global Shortcuts</h2>
-            <p>Open panel, queue paste, quick index paste, stacking, and word translation.</p>
+            <h2>{tr(selectedLocale, "globalShortcuts")}</h2>
+            <p>{tr(selectedLocale, "globalShortcutsDesc")}</p>
           </div>
 
           <ShortcutRecorder
-            label="Global shortcut"
+            label={tr(selectedLocale, "globalShortcut")}
             value={shortcut}
             defaultValue="CommandOrControl+Shift+V"
             onChange={setShortcut}
             checkAvailability={api.probeShortcutAvailable}
-            help="Click Record, then press the full combination. Backspace/Delete clears it."
+            help={tr(selectedLocale, "globalShortcutHelp")}
+            locale={selectedLocale}
           />
 
           <ShortcutRecorder
-            label="Queue step shortcut"
+            label={tr(selectedLocale, "queueStepShortcut")}
             value={queueStepShortcut}
             defaultValue="CommandOrControl+Alt+V"
             onChange={setQueueStepShortcut}
             checkAvailability={api.probeShortcutAvailable}
-            help="Used to paste queued items one by one."
+            help={tr(selectedLocale, "queueStepShortcutHelp")}
+            locale={selectedLocale}
           />
 
           <ShortcutRecorder
-            label="Quick paste prefix"
+            label={tr(selectedLocale, "quickPastePrefix")}
             value={quickPastePrefix}
             defaultValue="CommandOrControl+Shift"
             onChange={setQuickPastePrefix}
-            help="This modifier prefix combines with 1-9 and 0 for quick paste slots 1-10."
+            help={tr(selectedLocale, "quickPastePrefixHelp")}
+            locale={selectedLocale}
             allowModifierOnly
           />
 
           <ShortcutRecorder
-            label="Stack shortcut prefix"
+            label={tr(selectedLocale, "stackShortcutPrefix")}
             value={stackShortcutPrefix}
             defaultValue="CommandOrControl+Alt"
             onChange={setStackShortcutPrefix}
-            help="This modifier prefix combines with Up/Down to start or cancel stacking."
+            help={tr(selectedLocale, "stackShortcutPrefixHelp")}
+            locale={selectedLocale}
             allowModifierOnly
           />
 
           <ShortcutRecorder
-            label="Word translate shortcut"
+            label={tr(selectedLocale, "wordTranslateShortcut")}
             value={wordTranslateShortcut}
             defaultValue="Alt+C"
             onChange={setWordTranslateShortcut}
             checkAvailability={api.probeShortcutAvailable}
-            help="Copy the selected word or short phrase, then look it up through ECDICT."
+            help={tr(selectedLocale, "wordTranslateShortcutHelp")}
+            locale={selectedLocale}
           />
 
           {quickPastePrefixWarning && <div className="eacptrans-settings-msg">{quickPastePrefixWarning}</div>}
@@ -682,57 +714,61 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
 
         <section className="eacptrans-settings-card">
           <div className="eacptrans-settings-head">
-            <h2>Selected Item Keys</h2>
-            <p>These keys work when the EasyCPTrans window has focus.</p>
+            <h2>{tr(selectedLocale, "selectedItemKeys")}</h2>
+            <p>{tr(selectedLocale, "selectedItemKeysDesc")}</p>
           </div>
 
           <ShortcutRecorder
-            label="Selected item tag"
+            label={tr(selectedLocale, "selectedItemTag")}
             value={itemTagShortcut}
             defaultValue="T"
             onChange={setItemTagShortcut}
-            help="Open the quick tag picker for the selected item. Press it again to close menus."
+            help={tr(selectedLocale, "selectedItemTagHelp")}
+            locale={selectedLocale}
           />
 
           <ShortcutRecorder
-            label="Selected item private"
+            label={tr(selectedLocale, "selectedItemPrivate")}
             value={itemPrivateShortcut}
             defaultValue="M"
             onChange={setItemPrivateShortcut}
-            help="Toggle private state without changing item order."
+            help={tr(selectedLocale, "selectedItemPrivateHelp")}
+            locale={selectedLocale}
           />
 
           <ShortcutRecorder
-            label="Selected item pin"
+            label={tr(selectedLocale, "selectedItemPin")}
             value={itemPinShortcut}
             defaultValue="P"
             onChange={setItemPinShortcut}
-            help="Pin to the front, or unpin back to the newest non-pinned position."
+            help={tr(selectedLocale, "selectedItemPinHelp")}
+            locale={selectedLocale}
           />
 
           <ShortcutRecorder
-            label="Selected item delete"
+            label={tr(selectedLocale, "selectedItemDelete")}
             value={itemDeleteShortcut}
             defaultValue="Delete"
             onChange={setItemDeleteShortcut}
-            help="When the window is pinned on top, delete the selected item."
+            help={tr(selectedLocale, "selectedItemDeleteHelp")}
+            locale={selectedLocale}
           />
         </section>
 
         <section className="eacptrans-settings-card">
           <div className="eacptrans-settings-head">
-            <h2>Translation</h2>
-            <p>ECDICT powers selected-word and short-phrase translation cards.</p>
+            <h2>{tr(selectedLocale, "translation")}</h2>
+            <p>{tr(selectedLocale, "translationDesc")}</p>
           </div>
 
           <label className="eacptrans-field">
-            <span>ECDICT path</span>
+            <span>{tr(selectedLocale, "ecdictPath")}</span>
             <div className="eacptrans-path-row">
               <input
                 type="text"
                 value={ecdictPath}
                 onChange={(e) => setEcdictPath(e.target.value)}
-                placeholder="Use app data dictionaries or ./ECDICT/ecdict.csv"
+                placeholder={tr(selectedLocale, "ecdictPathPlaceholder")}
               />
               <button
                 type="button"
@@ -741,12 +777,12 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
                   const selected = await open({ directory: false, multiple: false });
                   if (selected && typeof selected === "string") setEcdictPath(selected);
                 }}
-                title="Choose ECDICT file"
+                title={tr(selectedLocale, "chooseEcdictFile")}
               >
                 <Folder className="h-4 w-4" />
               </button>
             </div>
-            <small>Supports ECDICT sqlite files first, with CSV fallback for local development.</small>
+            <small>{tr(selectedLocale, "ecdictPathHelp")}</small>
           </label>
         </section>
 
@@ -756,7 +792,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
               <Cloud className="h-4 w-4" />
               WebDAV
             </h2>
-            <p>Preserve and migrate older synchronized clipboard history into the current local database.</p>
+            <p>{tr(selectedLocale, "webdavDesc")}</p>
           </div>
 
           <label className="eacptrans-checkrow">
@@ -765,31 +801,31 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
               checked={webdavSyncEnabled}
               onChange={(e) => setWebdavSyncEnabled(e.target.checked)}
             />
-            <span>Enable WebDAV sync and migration</span>
+            <span>{tr(selectedLocale, "enableWebdav")}</span>
           </label>
 
           <label className="eacptrans-field">
-            <span>WebDAV URL</span>
+            <span>{tr(selectedLocale, "webdavUrl")}</span>
             <input
               type="text"
               value={webdavUrl}
               onChange={(e) => setWebdavUrl(e.target.value)}
-              placeholder="https://example.com/remote.php/dav/files/user/easycptrans"
+              placeholder={tr(selectedLocale, "webdavUrlPlaceholder")}
             />
           </label>
 
           <label className="eacptrans-field">
-            <span>Username</span>
+            <span>{tr(selectedLocale, "username")}</span>
             <input type="text" value={webdavUsername} onChange={(e) => setWebdavUsername(e.target.value)} />
           </label>
 
           <label className="eacptrans-field">
-            <span>Password</span>
+            <span>{tr(selectedLocale, "password")}</span>
             <input
               type="password"
               value={webdavPassword}
               onChange={(e) => setWebdavPassword(e.target.value)}
-              placeholder="Leave blank to keep the existing password"
+              placeholder={tr(selectedLocale, "webdavPasswordPlaceholder")}
             />
           </label>
 
@@ -800,7 +836,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
               onClick={() => void handleVerifyWebdav()}
               disabled={webdavBusy || !webdavUrl.trim() || !webdavUsername.trim()}
             >
-              {webdavBusy ? "Checking..." : "Verify WebDAV"}
+              {webdavBusy ? tr(selectedLocale, "checking") : tr(selectedLocale, "verifyWebdav")}
             </button>
             <button
               type="button"
@@ -809,7 +845,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
               disabled={webdavBusy || !webdavSyncEnabled || !webdavUrl.trim() || !webdavUsername.trim()}
             >
               {webdavBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : null}
-              {webdavBusy ? "Syncing..." : "Sync now"}
+              {webdavBusy ? tr(selectedLocale, "syncing") : tr(selectedLocale, "syncNow")}
             </button>
           </div>
           {webdavMessage && <span className="eacptrans-settings-msg">{webdavMessage}</span>}
@@ -819,42 +855,45 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
           <div className="eacptrans-settings-head">
             <h2>
               <Shield className="h-4 w-4" />
-              Privacy
+              {tr(selectedLocale, "privacy")}
             </h2>
             <p>
-              Password: {privacyStatus.passwordSet ? "configured" : "not configured"} · Question:{" "}
-              {privacyStatus.securityQuestionSet ? "configured" : "not configured"} · Private items:{" "}
+              {tr(selectedLocale, "privacyStatusPassword")}:{" "}
+              {privacyStatus.passwordSet ? tr(selectedLocale, "configured") : tr(selectedLocale, "notConfigured")} ·{" "}
+              {tr(selectedLocale, "privacyStatusQuestion")}:{" "}
+              {privacyStatus.securityQuestionSet ? tr(selectedLocale, "configured") : tr(selectedLocale, "notConfigured")} ·{" "}
+              {tr(selectedLocale, "privacyStatusPrivateItems")}:{" "}
               {privacyStatus.privateItems}
             </p>
           </div>
 
           {privacyStatus.passwordSet && (
             <label className="eacptrans-field">
-              <span>Current password</span>
+              <span>{tr(selectedLocale, "currentPassword")}</span>
               <input type="password" value={privacyCurrent} onChange={(e) => setPrivacyCurrent(e.target.value)} />
             </label>
           )}
 
           <div className="eacptrans-settings-cols">
             <label className="eacptrans-field">
-              <span>New password</span>
+              <span>{tr(selectedLocale, "newPassword")}</span>
               <input type="password" value={privacyNew} onChange={(e) => setPrivacyNew(e.target.value)} />
             </label>
 
             <label className="eacptrans-field">
-              <span>Confirm password</span>
+              <span>{tr(selectedLocale, "confirmPassword")}</span>
               <input type="password" value={privacyConfirm} onChange={(e) => setPrivacyConfirm(e.target.value)} />
             </label>
           </div>
 
           <div className="eacptrans-settings-cols">
             <label className="eacptrans-field">
-              <span>Security question</span>
+              <span>{tr(selectedLocale, "securityQuestion")}</span>
               <input type="text" value={securityQuestion} onChange={(e) => setSecurityQuestion(e.target.value)} />
             </label>
 
             <label className="eacptrans-field">
-              <span>Security answer</span>
+              <span>{tr(selectedLocale, "securityAnswer")}</span>
               <input type="password" value={securityAnswer} onChange={(e) => setSecurityAnswer(e.target.value)} />
             </label>
           </div>

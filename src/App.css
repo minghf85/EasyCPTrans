@@ -990,6 +990,22 @@
   flex: 1;
 }
 
+.eacptrans-field select {
+  height: 34px;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  background: #fff;
+  padding: 0 10px;
+  font-size: 12px;
+  color: #2b2b2b;
+  outline: none;
+}
+
+.eacptrans-field select:focus {
+  border-color: #0f6cbd;
+  box-shadow: 0 0 0 2px #0f6cbd22;
+}
+
 .eacptrans-checkrow {
   display: flex;
   align-items: center;
@@ -1039,12 +1055,27 @@
   border-radius: 10px;
   background: #fafafa;
   padding: 12px 14px;
+  transition: border-color 0.16s ease, background 0.16s ease;
+}
+
+.eacptrans-tag-manage-row:hover {
+  border-color: #d6e7f8;
+  background: #ffffff;
 }
 
 .eacptrans-tag-manage-meta {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
+}
+
+.eacptrans-tag-manage-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .eacptrans-tag-manage-meta small {
@@ -1064,11 +1095,22 @@
   color: #0067c0;
 }
 
+.eacptrans-tag-kind-badge {
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #fff;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+}
+
 .eacptrans-tag-manage-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .eacptrans-tag-color-picker {
@@ -1164,6 +1206,12 @@
 
 .eacptrans-secondary-btn:disabled {
   opacity: 0.6;
+}
+
+.eacptrans-tag-toggle-btn.active {
+  border-color: #f7c948;
+  background: #fff8db;
+  color: #8a5a00;
 }
 
 @media (max-width: 920px) {

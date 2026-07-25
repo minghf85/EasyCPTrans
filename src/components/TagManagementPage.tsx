@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Pencil, Plus, Star, Tag, Trash2 } from "lucide-react";
+import { tr, type Locale } from "../lib/i18n";
 import type { ManagedTag } from "../types";
 
 interface Props {
@@ -11,6 +12,7 @@ interface Props {
   onDelete: (tag: string) => Promise<void>;
   onToggleCommon: (tag: string) => Promise<void>;
   onSetColor: (tag: string, color: string) => Promise<void>;
+  locale: Locale;
 }
 
 export function TagManagementPage({
@@ -22,6 +24,7 @@ export function TagManagementPage({
   onDelete,
   onToggleCommon,
   onSetColor,
+  locale,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [editingTag, setEditingTag] = useState<string | null>(null);
@@ -35,6 +38,7 @@ export function TagManagementPage({
       [...tags].sort(
         (a, b) =>
           Number(b.common) - Number(a.common) ||
+          Number(Boolean(b.system)) - Number(Boolean(a.system)) ||
           (tagCounts.get(b.name) ?? 0) - (tagCounts.get(a.name) ?? 0) ||
           a.name.localeCompare(b.name),
       ),
@@ -48,7 +52,7 @@ export function TagManagementPage({
     try {
       await onCreate(value);
       setDraft("");
-      setMessage("Tag created.");
+      setMessage(tr(locale, "tagCreated"));
     } catch (err) {
       setMessage(String(err));
       setCreateErrorPulse(false);
@@ -65,13 +69,21 @@ export function TagManagementPage({
       await onRename(editingTag, value);
       setEditingTag(null);
       setEditingValue("");
-      setMessage("Tag renamed.");
+      setMessage(tr(locale, "tagRenamed"));
     } catch (err) {
       setMessage(String(err));
       setRenameErrorPulse(false);
       window.setTimeout(() => setRenameErrorPulse(true), 0);
     }
   };
+
+  const cancelRename = () => {
+    setEditingTag(null);
+    setEditingValue("");
+    setRenameErrorPulse(false);
+    setMessage("");
+  };
+
   const isDeviceTag = (tag: ManagedTag) => tag.id?.startsWith("sys-device-") ?? false;
 
   return (
@@ -81,13 +93,13 @@ export function TagManagementPage({
           <div className="eacptrans-settings-head">
             <h2>
               <Tag className="h-4 w-4" />
-              Tag Management
+              {tr(locale, "tagManagement")}
             </h2>
-            <p>Create reusable custom tags. Functional tags are added automatically by EasyCPTrans.</p>
+            <p>{tr(locale, "tagIntro")}</p>
           </div>
 
           <div className="eacptrans-field">
-            <span>New Tag</span>
+            <span>{tr(locale, "newTag")}</span>
             <div className="eacptrans-tag-manage-create">
               <input
                 className={createErrorPulse ? "eacptrans-tag-input-error" : ""}
@@ -95,14 +107,18 @@ export function TagManagementPage({
                 onChange={(event) => {
                   setDraft(event.target.value);
                   setCreateErrorPulse(false);
+                  setMessage("");
                 }}
-                placeholder="Enter tag name"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void handleCreate();
+                }}
+                placeholder={tr(locale, "enterTagName")}
                 disabled={busy}
                 onAnimationEnd={() => setCreateErrorPulse(false)}
               />
               <button className="eacptrans-primary-btn" onClick={() => void handleCreate()} disabled={busy || !draft.trim()}>
                 <Plus className="h-4 w-4" />
-                Add tag
+                {tr(locale, "addTag")}
               </button>
             </div>
           </div>
@@ -114,27 +130,36 @@ export function TagManagementPage({
           <div className="eacptrans-settings-head">
             <h2>
               <Tag className="h-4 w-4" />
-              Existing Tags
+              {tr(locale, "existingTags")}
             </h2>
-            <p>Functional tags can only change color and whether they stay in the top bar.</p>
+            <p>{tr(locale, "existingTagsDesc")}</p>
           </div>
 
           <div className="eacptrans-tag-manage-list">
             {sortedTags.length === 0 ? (
-              <div className="eacptrans-tag-manage-empty">No tags yet.</div>
+              <div className="eacptrans-tag-manage-empty">{tr(locale, "noTags")}</div>
             ) : (
               sortedTags.map((tag) => {
                 const count = tagCounts.get(tag.name) ?? 0;
                 const editing = editingTag === tag.name;
                 const deviceTag = isDeviceTag(tag);
+                const canRename = deviceTag || !tag.system;
                 return (
                   <div key={tag.name} className="eacptrans-tag-manage-row">
                     <div className="eacptrans-tag-manage-meta">
-                      <span className="eacptrans-tag-manage-pill" style={{ background: `${tag.color}18`, color: tag.color }}>
-                        #{tag.name}
-                      </span>
-                      <small>{count} items · {deviceTag ? "Device name" : tag.system ? "Functional" : tag.common ? "Common" : "Hidden from tabs"}</small>
+                      <div className="eacptrans-tag-manage-title">
+                        <span className="eacptrans-tag-manage-pill" style={{ background: `${tag.color}18`, color: tag.color }}>
+                          #{tag.name}
+                        </span>
+                        {deviceTag && <span className="eacptrans-tag-kind-badge">{tr(locale, "deviceName")}</span>}
+                        {tag.system && !deviceTag && <span className="eacptrans-tag-kind-badge">{tr(locale, "functional")}</span>}
+                        {!tag.system && <span className="eacptrans-tag-kind-badge">{tr(locale, "custom")}</span>}
+                      </div>
+                      <small>
+                        {count} {tr(locale, "itemCount")} · {tag.common ? tr(locale, "topBar") : tr(locale, "hidden")}
+                      </small>
                     </div>
+
                     {editing ? (
                       <div className="eacptrans-tag-manage-actions">
                         <input
@@ -143,28 +168,34 @@ export function TagManagementPage({
                           onChange={(event) => {
                             setEditingValue(event.target.value);
                             setRenameErrorPulse(false);
+                            setMessage("");
                           }}
                           onKeyDown={(event) => {
                             if (event.key === "Enter") void handleRename();
-                            if (event.key === "Escape") {
-                              setEditingTag(null);
-                              setEditingValue("");
-                            }
+                            if (event.key === "Escape") cancelRename();
                           }}
                           disabled={busy}
                           onAnimationEnd={() => setRenameErrorPulse(false)}
                         />
                         <button className="eacptrans-primary-btn" onClick={() => void handleRename()} disabled={busy || !editingValue.trim()}>
-                          Save
+                          {tr(locale, "save")}
+                        </button>
+                        <button className="eacptrans-secondary-btn" onClick={cancelRename} disabled={busy}>
+                          {tr(locale, "cancel")}
                         </button>
                       </div>
                     ) : (
                       <div className="eacptrans-tag-manage-actions">
-                        <button className="eacptrans-secondary-btn" onClick={() => void onToggleCommon(tag.name)} disabled={busy}>
+                        <button
+                          className={`eacptrans-secondary-btn eacptrans-tag-toggle-btn ${tag.common ? "active" : ""}`}
+                          onClick={() => void onToggleCommon(tag.name)}
+                          disabled={busy}
+                          title={tag.common ? tr(locale, "hideFromTopBar") : tr(locale, "showInTopBar")}
+                        >
                           <Star className="h-4 w-4" />
-                          {tag.common ? "Common" : "Make common"}
+                          {tag.common ? tr(locale, "topBar") : tr(locale, "hidden")}
                         </button>
-                        <label className="eacptrans-tag-color-picker">
+                        <label className="eacptrans-tag-color-picker" title={tr(locale, "color")}>
                           <input
                             type="color"
                             value={tag.color}
@@ -176,18 +207,20 @@ export function TagManagementPage({
                         <button
                           className="eacptrans-secondary-btn"
                           onClick={() => {
+                            if (!canRename) return;
                             setEditingTag(tag.name);
                             setEditingValue(tag.name);
+                            setMessage("");
                           }}
-                          disabled={busy || (tag.system && !deviceTag)}
+                          disabled={busy || !canRename}
                         >
                           <Pencil className="h-4 w-4" />
-                          Rename
+                          {canRename ? tr(locale, "rename") : tr(locale, "protectedTag")}
                         </button>
                         {!tag.system && (
                           <button className="eacptrans-secondary-btn" onClick={() => void onDelete(tag.name)} disabled={busy}>
                             <Trash2 className="h-4 w-4" />
-                            Delete
+                            {tr(locale, "delete")}
                           </button>
                         )}
                       </div>
