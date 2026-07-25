@@ -210,3 +210,10 @@ pnpm tauri build
 
 - [tauri-plugin-clipboard-x](https://github.com/ayangweb/tauri-plugin-clipboard-x)
 - [ECDICT](https://github.com/skywind3000/ECDICT)
+
+## Device Source Tags
+
+- Every newly created clipboard item automatically receives a device source tag using the device name directly, formatted as `#<device name>`.
+- Device tags are system-level metadata, same as `#Text`, `#Image`, and `#File`: they are shown on cards and can be used for filtering, but they are not manually edited in the normal tag picker.
+- The device name is configured in Settings under WebDAV. When it is renamed, matching local history records are migrated from the old `#Device...` tag to the new one.
+- This is designed for WebDAV sync: after multiple devices sync into one history database, each card still shows which device produced it.

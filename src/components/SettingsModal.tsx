@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Cloud, Folder, RefreshCw, Shield } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
@@ -24,6 +24,10 @@ interface Props {
     webdavSyncEnabled: boolean;
     deviceName: string;
   }) => void;
+}
+
+export interface SettingsModalHandle {
+  save: () => Promise<void>;
 }
 
 function normalizeShortcutValue(value: string | null | undefined, fallback: string) {
@@ -160,7 +164,7 @@ function ShortcutRecorder({
           }
           onChange(canonicalizeShortcut(draftValue));
           setDraftValue("");
-          setStatus("Recorded. Save settings to apply.");
+          setStatus("Recorded. Click the Settings tab again to save.");
           setRecording(false);
           return;
         }
@@ -188,7 +192,7 @@ function ShortcutRecorder({
 
       onChange(canonical);
       setDraftValue("");
-      setStatus("Recorded. Save settings to apply.");
+      setStatus("Recorded. Click the Settings tab again to save.");
       setRecording(false);
     };
 
@@ -251,7 +255,7 @@ function ShortcutRecorder({
   );
 }
 
-export function SettingsModal({ onSaved }: Props) {
+export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function SettingsModal({ onSaved }, ref) {
   const [cachePath, setCachePath] = useState("");
   const [shortcut, setShortcut] = useState("CommandOrControl+Shift+V");
   const [queueStepShortcut, setQueueStepShortcut] = useState("CommandOrControl+Alt+V");
@@ -268,9 +272,6 @@ export function SettingsModal({ onSaved }: Props) {
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const [pageSize, setPageSize] = useState(50);
   const [historyLimit, setHistoryLimit] = useState(5000);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
-
   const [webdavUrl, setWebdavUrl] = useState("");
   const [webdavUsername, setWebdavUsername] = useState("");
   const [webdavPassword, setWebdavPassword] = useState("");
@@ -289,7 +290,6 @@ export function SettingsModal({ onSaved }: Props) {
   const [privacyConfirm, setPrivacyConfirm] = useState("");
   const [securityQuestion, setSecurityQuestion] = useState("");
   const [securityAnswer, setSecurityAnswer] = useState("");
-  const [privacyBusy, setPrivacyBusy] = useState(false);
   const [privacyMessage, setPrivacyMessage] = useState("");
   const quickPastePrefixWarning =
     /^super$/i.test(quickPastePrefix.trim())
@@ -414,8 +414,6 @@ export function SettingsModal({ onSaved }: Props) {
   }, []);
 
   const handleSave = async () => {
-    setSaving(true);
-    setMessage("");
     try {
       await api.setConfig({
         cachePath,
@@ -441,6 +439,17 @@ export function SettingsModal({ onSaved }: Props) {
         ...(webdavPassword.trim() ? { webdavPassword: webdavPassword.trim() } : {}),
       });
       const shortcutReport = await api.refreshGlobalShortcuts();
+      const shouldSavePrivacy =
+        Boolean(privacyCurrent.trim()) ||
+        Boolean(privacyNew.trim()) ||
+        Boolean(privacyConfirm.trim()) ||
+        Boolean(securityAnswer.trim());
+      if (shouldSavePrivacy) {
+        const privacySaved = await handleSetPrivacyPassword();
+        if (!privacySaved) {
+          throw new Error("Privacy settings were not saved.");
+        }
+      }
       onSaved({
         shortcut: normalizedShortcut,
         queueStepShortcut: normalizedQueueStepShortcut,
@@ -463,18 +472,14 @@ export function SettingsModal({ onSaved }: Props) {
       });
       setWebdavPassword("");
       if (shortcutReport.failed.length > 0) {
-        setMessage(
-          `Settings saved, but some shortcuts failed: ${shortcutReport.failed
+        throw new Error(
+          `Some shortcuts failed: ${shortcutReport.failed
             .map((item) => `${item.shortcut} (${item.reason})`)
             .join(" | ")}`,
         );
-      } else {
-        setMessage("Settings saved.");
       }
     } catch (err) {
-      setMessage("Save failed: " + String(err));
-    } finally {
-      setSaving(false);
+      throw err;
     }
   };
 
@@ -512,29 +517,28 @@ export function SettingsModal({ onSaved }: Props) {
     }
   };
 
-  const handleSetPrivacyPassword = async () => {
+  const handleSetPrivacyPassword = async (): Promise<boolean> => {
     const next = privacyNew.trim();
     const question = securityQuestion.trim();
     const answer = securityAnswer.trim();
 
     if (next.length < 6) {
       setPrivacyMessage("Privacy password must be at least 6 characters.");
-      return;
+      return false;
     }
     if (next !== privacyConfirm) {
       setPrivacyMessage("The two new passwords do not match.");
-      return;
+      return false;
     }
     if (!question) {
       setPrivacyMessage("Security question is required.");
-      return;
+      return false;
     }
     if (answer.length < 2) {
       setPrivacyMessage("Security answer must be at least 2 characters.");
-      return;
+      return false;
     }
 
-    setPrivacyBusy(true);
     setPrivacyMessage("");
     try {
       await api.setPrivacyPassword(
@@ -553,12 +557,14 @@ export function SettingsModal({ onSaved }: Props) {
         securityQuestionSet: true,
       }));
       setPrivacyMessage("Privacy settings updated.");
+      return true;
     } catch (err) {
       setPrivacyMessage("Failed to update privacy settings: " + String(err));
-    } finally {
-      setPrivacyBusy(false);
+      return false;
     }
   };
+
+  useImperativeHandle(ref, () => ({ save: handleSave }));
 
   return (
     <div className="eacptrans-settings-page">
@@ -592,6 +598,39 @@ export function SettingsModal({ onSaved }: Props) {
             </div>
             {effectiveDir && <small>Current path: {effectiveDir}</small>}
           </label>
+
+          <div className="eacptrans-settings-cols">
+            <label className="eacptrans-field">
+              <span>Page size</span>
+              <input
+                type="number"
+                min="10"
+                max="500"
+                value={pageSize}
+                onChange={(e) => setPageSize(parseInt(e.target.value, 10) || 50)}
+              />
+            </label>
+
+            <label className="eacptrans-field">
+              <span>History limit</span>
+              <input
+                type="number"
+                min="100"
+                max="20000"
+                step="100"
+                value={historyLimit}
+                onChange={(e) => setHistoryLimit(parseInt(e.target.value, 10) || 5000)}
+              />
+            </label>
+          </div>
+
+        </section>
+
+        <section className="eacptrans-settings-card">
+          <div className="eacptrans-settings-head">
+            <h2>Global Shortcuts</h2>
+            <p>Open panel, queue paste, quick index paste, stacking, and word translation.</p>
+          </div>
 
           <ShortcutRecorder
             label="Global shortcut"
@@ -638,12 +677,21 @@ export function SettingsModal({ onSaved }: Props) {
             help="Copy the selected word or short phrase, then look it up through ECDICT."
           />
 
+          {quickPastePrefixWarning && <div className="eacptrans-settings-msg">{quickPastePrefixWarning}</div>}
+        </section>
+
+        <section className="eacptrans-settings-card">
+          <div className="eacptrans-settings-head">
+            <h2>Selected Item Keys</h2>
+            <p>These keys work when the EasyCPTrans window has focus.</p>
+          </div>
+
           <ShortcutRecorder
             label="Selected item tag"
             value={itemTagShortcut}
             defaultValue="T"
             onChange={setItemTagShortcut}
-            help="When the window is pinned on top, open the quick tag picker for the selected item."
+            help="Open the quick tag picker for the selected item. Press it again to close menus."
           />
 
           <ShortcutRecorder
@@ -651,7 +699,7 @@ export function SettingsModal({ onSaved }: Props) {
             value={itemPrivateShortcut}
             defaultValue="M"
             onChange={setItemPrivateShortcut}
-            help="When the window is pinned on top, mark the selected item as private."
+            help="Toggle private state without changing item order."
           />
 
           <ShortcutRecorder
@@ -659,7 +707,7 @@ export function SettingsModal({ onSaved }: Props) {
             value={itemPinShortcut}
             defaultValue="P"
             onChange={setItemPinShortcut}
-            help="When the window is pinned on top, pin or unpin the selected item."
+            help="Pin to the front, or unpin back to the newest non-pinned position."
           />
 
           <ShortcutRecorder
@@ -669,6 +717,13 @@ export function SettingsModal({ onSaved }: Props) {
             onChange={setItemDeleteShortcut}
             help="When the window is pinned on top, delete the selected item."
           />
+        </section>
+
+        <section className="eacptrans-settings-card">
+          <div className="eacptrans-settings-head">
+            <h2>Translation</h2>
+            <p>ECDICT powers selected-word and short-phrase translation cards.</p>
+          </div>
 
           <label className="eacptrans-field">
             <span>ECDICT path</span>
@@ -693,49 +748,6 @@ export function SettingsModal({ onSaved }: Props) {
             </div>
             <small>Supports ECDICT sqlite files first, with CSV fallback for local development.</small>
           </label>
-          {quickPastePrefixWarning && <div className="eacptrans-settings-msg">{quickPastePrefixWarning}</div>}
-
-          <label className="eacptrans-checkrow">
-            <input type="checkbox" checked={autoPaste} onChange={(e) => setAutoPaste(e.target.checked)} />
-            <span>Auto paste after selecting a clipboard item</span>
-          </label>
-
-          <label className="eacptrans-checkrow">
-            <input type="checkbox" checked={alwaysOnTop} onChange={(e) => setAlwaysOnTop(e.target.checked)} />
-            <span>Keep window always on top</span>
-          </label>
-
-          <div className="eacptrans-settings-cols">
-            <label className="eacptrans-field">
-              <span>Page size</span>
-              <input
-                type="number"
-                min="10"
-                max="500"
-                value={pageSize}
-                onChange={(e) => setPageSize(parseInt(e.target.value, 10) || 50)}
-              />
-            </label>
-
-            <label className="eacptrans-field">
-              <span>History limit</span>
-              <input
-                type="number"
-                min="100"
-                max="20000"
-                step="100"
-                value={historyLimit}
-                onChange={(e) => setHistoryLimit(parseInt(e.target.value, 10) || 5000)}
-              />
-            </label>
-          </div>
-
-          <div className="eacptrans-settings-actions">
-            <button type="button" className="eacptrans-primary-btn" onClick={() => void handleSave()} disabled={saving}>
-              {saving ? "Saving..." : "Save settings"}
-            </button>
-            {message && <span className="eacptrans-settings-msg">{message}</span>}
-          </div>
         </section>
 
         <section className="eacptrans-settings-card">
@@ -779,11 +791,6 @@ export function SettingsModal({ onSaved }: Props) {
               onChange={(e) => setWebdavPassword(e.target.value)}
               placeholder="Leave blank to keep the existing password"
             />
-          </label>
-
-          <label className="eacptrans-field">
-            <span>Device name</span>
-            <input type="text" value={deviceName} onChange={(e) => setDeviceName(e.target.value)} />
           </label>
 
           <div className="eacptrans-settings-actions">
@@ -852,19 +859,9 @@ export function SettingsModal({ onSaved }: Props) {
             </label>
           </div>
 
-          <div className="eacptrans-settings-actions">
-            <button
-              type="button"
-              className="eacptrans-primary-btn"
-              onClick={() => void handleSetPrivacyPassword()}
-              disabled={privacyBusy}
-            >
-              {privacyBusy ? "Saving..." : "Save privacy settings"}
-            </button>
-            {privacyMessage && <span className="eacptrans-settings-msg">{privacyMessage}</span>}
-          </div>
+          {privacyMessage && <span className="eacptrans-settings-msg">{privacyMessage}</span>}
         </section>
       </div>
     </div>
   );
-}
+});

@@ -418,6 +418,7 @@ pub fn run() {
             commands::toggle_pin,
             commands::delete_item,
             commands::set_tags,
+            commands::rename_device_tag,
             commands::mark_used,
             commands::update_text_item,
             commands::create_stack_text_item,

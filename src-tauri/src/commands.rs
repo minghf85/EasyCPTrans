@@ -11,7 +11,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-const PRIVACY_TAG: &str = "private";
+const PRIVATE_TAG: &str = "Private";
+const PINNED_TAG: &str = "Pinned";
 static ECDICT_CSV_CACHE: once_cell::sync::Lazy<
     std::sync::Mutex<HashMap<PathBuf, HashMap<String, DictionaryEntry>>>,
 > = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
@@ -23,6 +24,55 @@ fn is_privacy_tag(tag: &str) -> bool {
 
 fn remove_privacy_tags(tags: Vec<String>) -> Vec<String> {
     tags.into_iter().filter(|t| !is_privacy_tag(t)).collect()
+}
+
+fn normalize_functional_tags(tags: Vec<String>) -> Vec<String> {
+    tags.into_iter()
+        .map(|tag| {
+            let normalized = tag.trim();
+            if normalized.eq_ignore_ascii_case("text") {
+                "Text".to_string()
+            } else if normalized.eq_ignore_ascii_case("image") {
+                "Image".to_string()
+            } else if normalized.eq_ignore_ascii_case("file") {
+                "File".to_string()
+            } else if normalized.eq_ignore_ascii_case("word") {
+                "Word".to_string()
+            } else if is_privacy_tag(normalized) {
+                PRIVATE_TAG.to_string()
+            } else if normalized.eq_ignore_ascii_case("pinned") {
+                PINNED_TAG.to_string()
+            } else {
+                normalized.to_string()
+            }
+        })
+        .filter(|tag| !tag.is_empty())
+        .collect()
+}
+
+fn normalize_device_name(value: &str) -> String {
+    let cleaned = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.is_empty() {
+        default_device_name()
+    } else {
+        cleaned
+    }
+}
+
+fn device_tag_name(device_name: &str) -> String {
+    normalize_device_name(device_name)
+}
+
+fn attach_device_identity(
+    metadata: &mut HashMap<String, Vec<String>>,
+    tags: &mut Vec<String>,
+    device_name: &str,
+) {
+    let normalized = normalize_device_name(device_name);
+    let device_tag = device_tag_name(&normalized);
+    metadata.insert("deviceName".to_string(), vec![normalized]);
+    metadata.insert("deviceTag".to_string(), vec![device_tag.clone()]);
+    *tags = merge_unique_tags(normalize_functional_tags(tags.clone()), vec![device_tag]);
 }
 
 fn parse_tags(raw: Option<String>) -> Vec<String> {
@@ -880,6 +930,8 @@ pub async fn ingest_clipboard(
             metadata.insert("sourceApp".to_string(), vec![app_name]);
         }
     }
+    let app_config = read_app_config(&app);
+    let device_name = normalize_device_name(&app_config.device_name);
 
     let raw = ClipboardItem {
         content_type: payload.content_type,
@@ -909,6 +961,7 @@ pub async fn ingest_clipboard(
             });
         }
     };
+    attach_device_identity(&mut processed.metadata, &mut processed.tags, &device_name);
     println!(
         "[EasyCPTrans] Ingest pipeline accepted: type={}, content={}, tags={:?}, metadata_keys={:?}",
         processed.content_type,
@@ -1043,9 +1096,21 @@ pub async fn load_history(
             let preview: Option<String> = row.try_get("preview_text").ok();
             let storage: Option<String> = row.try_get("storage_path").ok();
             let is_private = row.try_get::<i64, _>("is_private").unwrap_or(0) != 0;
-            let mut tags = parse_tags(row.try_get("tags").ok());
+            let mut tags = normalize_functional_tags(parse_tags(row.try_get("tags").ok()));
+            let type_tag = match content_type.as_str() {
+                "text" => Some("Text".to_string()),
+                "image" => Some("Image".to_string()),
+                "file" => Some("File".to_string()),
+                _ => None,
+            };
+            if let Some(tag) = type_tag {
+                tags = merge_unique_tags(tags, vec![tag]);
+            }
             if !is_private {
                 tags = remove_privacy_tags(tags);
+            }
+            if row.try_get::<i64, _>("is_pinned").unwrap_or(0) != 0 {
+                tags = merge_unique_tags(tags, vec![PINNED_TAG.to_string()]);
             }
 
             let content = if is_private {
@@ -1060,11 +1125,10 @@ pub async fn load_history(
                 storage.unwrap_or_default()
             };
 
-            let mut metadata = if is_private {
-                HashMap::new()
-            } else {
-                parse_metadata(row.try_get("metadata").ok())
-            };
+            let mut metadata = parse_metadata(row.try_get("metadata").ok());
+            if is_private {
+                metadata.retain(|key, _| key == "deviceName" || key == "deviceTag");
+            }
             if !is_private {
                 enrich_size_metadata(&content_type, &content, &mut metadata);
             }
@@ -1229,7 +1293,7 @@ pub async fn protect_item(
     }
 
     let row = sqlx::query(
-        "SELECT content_type, preview_text, storage_path, tags, is_private
+        "SELECT content_type, preview_text, storage_path, tags, metadata, is_private
          FROM clipboard_items
          WHERE id = ?1
          LIMIT 1",
@@ -1262,11 +1326,19 @@ pub async fn protect_item(
     }
 
     let encrypted = encrypt_content(&cfg, &plain)?;
-    let mut tags = parse_tags(row.try_get("tags").ok());
-    if !tags.iter().any(|t| is_privacy_tag(t)) {
-        tags.push(PRIVACY_TAG.to_string());
-    }
+    let mut tags = normalize_functional_tags(parse_tags(row.try_get("tags").ok()));
+    tags = merge_unique_tags(tags, vec![PRIVATE_TAG.to_string()]);
     let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
+    let existing_metadata = parse_metadata(row.try_get("metadata").ok());
+    let kept_metadata = ["deviceName", "deviceTag"]
+        .into_iter()
+        .filter_map(|key| {
+            existing_metadata
+                .get(key)
+                .map(|value| (key.to_string(), value.clone()))
+        })
+        .collect::<HashMap<_, _>>();
+    let metadata_json = serde_json::to_string(&kept_metadata).unwrap_or_else(|_| "{}".into());
 
     sqlx::query(
         "UPDATE clipboard_items
@@ -1275,12 +1347,13 @@ pub async fn protect_item(
              content_hash = NULL,
              preview_text = NULL,
              storage_path = NULL,
-             metadata = '{}',
+             metadata = ?3,
              tags = ?2
-         WHERE id = ?3",
+         WHERE id = ?4",
     )
     .bind(&encrypted)
     .bind(&tags_json)
+    .bind(&metadata_json)
     .bind(id)
     .execute(&state.pool)
     .await
@@ -1325,7 +1398,9 @@ pub async fn unprotect_item(
     let content_type: String = row.get("content_type");
     let hash = compute_hash(&content_type, &plain);
 
-    let tags = remove_privacy_tags(parse_tags(row.try_get("tags").ok()));
+    let tags = remove_privacy_tags(normalize_functional_tags(parse_tags(
+        row.try_get("tags").ok(),
+    )));
     let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
 
     let (preview, storage) = if content_type == "text" {
@@ -1363,21 +1438,36 @@ pub async fn toggle_pin(
     state: State<'_, AppState>,
     id: i64,
 ) -> Result<bool, String> {
-    let res = sqlx::query(
+    let row = sqlx::query("SELECT is_pinned, tags FROM clipboard_items WHERE id = ?1 LIMIT 1")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("item {} not found", id))?;
+    let next_pinned = row.get::<i64, _>("is_pinned") == 0;
+    let mut tags = normalize_functional_tags(parse_tags(row.try_get("tags").ok()));
+    tags.retain(|tag| !tag.eq_ignore_ascii_case(PINNED_TAG));
+    if next_pinned {
+        tags.push(PINNED_TAG.to_string());
+    }
+    let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
+
+    sqlx::query(
         "UPDATE clipboard_items
-         SET is_pinned = CASE WHEN is_pinned = 1 THEN 0 ELSE 1 END,
+         SET is_pinned = ?1,
+             tags = ?2,
              last_used_at = CURRENT_TIMESTAMP
-         WHERE id = ?1
-         RETURNING is_pinned",
+         WHERE id = ?3",
     )
+    .bind(if next_pinned { 1 } else { 0 })
+    .bind(tags_json)
     .bind(id)
-    .fetch_optional(&state.pool)
+    .execute(&state.pool)
     .await
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| format!("item {} not found", id))?;
+    .map_err(|e| e.to_string())?;
 
     emit_changed(&app).await;
-    Ok(res.get::<i64, _>("is_pinned") != 0)
+    Ok(next_pinned)
 }
 
 #[tauri::command]
@@ -1402,27 +1492,67 @@ pub async fn set_tags(
     id: i64,
     tags: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    let mut seen = std::collections::HashSet::new();
-    let cleaned: Vec<String> = tags
-        .into_iter()
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
-        .filter(|t| seen.insert(t.clone()))
-        .collect();
+    let row = sqlx::query(
+        "SELECT content_type, tags, metadata, is_private, is_pinned
+         FROM clipboard_items
+         WHERE id = ?1
+         LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| format!("item {} not found", id))?;
 
-    let row = sqlx::query("SELECT is_private FROM clipboard_items WHERE id = ?1 LIMIT 1")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("item {} not found", id))?;
-
+    let content_type: String = row.get("content_type");
     let is_private = row.try_get::<i64, _>("is_private").unwrap_or(0) != 0;
-    let has_privacy_tag = cleaned.iter().any(|t| is_privacy_tag(t));
-    if has_privacy_tag != is_private {
-        return Err("闅愮鏍囩闇€閫氳繃闅愮鎸夐挳杩涜鍙樻洿".to_string());
-    }
+    let is_pinned = row.try_get::<i64, _>("is_pinned").unwrap_or(0) != 0;
+    let metadata = parse_metadata(row.try_get("metadata").ok());
 
+    let is_device_tag = |tag: &str| {
+        metadata
+            .get("deviceName")
+            .map(|values| values.iter().any(|device| device.eq_ignore_ascii_case(tag)))
+            .unwrap_or(false)
+    };
+    let is_functional_tag = |tag: &str| {
+        tag.eq_ignore_ascii_case("Text")
+            || tag.eq_ignore_ascii_case("Image")
+            || tag.eq_ignore_ascii_case("File")
+            || tag.eq_ignore_ascii_case("Word")
+            || tag.eq_ignore_ascii_case(PRIVATE_TAG)
+            || tag.eq_ignore_ascii_case(PINNED_TAG)
+            || is_device_tag(tag)
+    };
+
+    let mut user_tags = normalize_functional_tags(tags);
+    user_tags.retain(|tag| !is_functional_tag(tag));
+
+    let current_functional_tags = normalize_functional_tags(parse_tags(row.try_get("tags").ok()))
+        .into_iter()
+        .filter(|tag| is_functional_tag(tag))
+        .collect::<Vec<_>>();
+    let type_tag = match content_type.as_str() {
+        "text" => Some("Text".to_string()),
+        "image" => Some("Image".to_string()),
+        "file" => Some("File".to_string()),
+        _ => None,
+    };
+    let required_tags = [
+        type_tag,
+        is_private.then(|| PRIVATE_TAG.to_string()),
+        is_pinned.then(|| PINNED_TAG.to_string()),
+        metadata
+            .get("deviceName")
+            .and_then(|values| values.first().cloned()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let cleaned = merge_unique_tags(
+        merge_unique_tags(user_tags, current_functional_tags),
+        required_tags,
+    );
     let json = serde_json::to_string(&cleaned).unwrap_or_else(|_| "[]".into());
 
     sqlx::query("UPDATE clipboard_items SET tags = ?1 WHERE id = ?2")
@@ -1518,18 +1648,21 @@ pub async fn create_stack_text_item(
             normalized
         ),
     );
-    let metadata = serde_json::to_string(&HashMap::from([(
-        "length".to_string(),
-        vec![normalized.len().to_string()],
-    )]))
-    .unwrap_or_else(|_| "{}".into());
+    let mut metadata_map =
+        HashMap::from([("length".to_string(), vec![normalized.len().to_string()])]);
+    let mut tags = vec!["Text".to_string()];
+    let app_config = read_app_config(&app);
+    attach_device_identity(&mut metadata_map, &mut tags, &app_config.device_name);
+    let metadata = serde_json::to_string(&metadata_map).unwrap_or_else(|_| "{}".into());
+    let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
     let id = sqlx::query(
         "INSERT INTO clipboard_items
             (content_type, content_hash, preview_text, storage_path, tags, metadata, use_count, last_used_at)
-         VALUES ('text', ?1, ?2, NULL, '[]', ?3, 1, CURRENT_TIMESTAMP)",
+         VALUES ('text', ?1, ?2, NULL, ?3, ?4, 1, CURRENT_TIMESTAMP)",
     )
     .bind(&hash)
     .bind(&normalized)
+    .bind(&tags_json)
     .bind(&metadata)
     .execute(&state.pool)
     .await
@@ -1546,7 +1679,7 @@ pub async fn create_translation_item(
     query: &str,
 ) -> Result<i64, String> {
     let pending_content = format!("正在翻译 \"{}\"", query);
-    let metadata = serde_json::to_string(&HashMap::from([
+    let mut metadata_map = HashMap::from([
         ("translationStatus".to_string(), vec!["pending".to_string()]),
         ("wordQuery".to_string(), vec![query.to_string()]),
         ("dictionary".to_string(), vec!["ECDICT".to_string()]),
@@ -1554,9 +1687,12 @@ pub async fn create_translation_item(
             "length".to_string(),
             vec![pending_content.len().to_string()],
         ),
-    ]))
-    .unwrap_or_else(|_| "{}".into());
-    let tags = serde_json::to_string(&vec!["Word"]).unwrap_or_else(|_| "[\"Word\"]".into());
+    ]);
+    let mut tags = vec!["Text".to_string(), "Word".to_string()];
+    let app_config = read_app_config(app);
+    attach_device_identity(&mut metadata_map, &mut tags, &app_config.device_name);
+    let metadata = serde_json::to_string(&metadata_map).unwrap_or_else(|_| "{}".into());
+    let tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[\"Word\"]".into());
     let hash = compute_hash(
         "text",
         &format!(
@@ -2011,6 +2147,79 @@ fn default_device_name() -> String {
     "This Device".to_string()
 }
 
+async fn sync_device_identity_rename<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    old_device_name: &str,
+    new_device_name: &str,
+    fill_missing: bool,
+) -> Result<(), String> {
+    let old_name = normalize_device_name(old_device_name);
+    let new_name = normalize_device_name(new_device_name);
+    let renaming = old_name != new_name;
+    let old_tag = device_tag_name(&old_name);
+    let new_tag = device_tag_name(&new_name);
+    let state = app.state::<AppState>();
+    let rows = sqlx::query("SELECT id, tags, metadata FROM clipboard_items")
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut changed_count = 0usize;
+    for row in rows {
+        let id: i64 = row.get("id");
+        let mut tags = normalize_functional_tags(parse_tags(row.try_get("tags").ok()));
+        let mut metadata = parse_metadata(row.try_get("metadata").ok());
+        let has_device_metadata =
+            metadata.contains_key("deviceName") || metadata.contains_key("deviceTag");
+        let metadata_matches = renaming
+            && metadata
+                .get("deviceName")
+                .map(|values| {
+                    values
+                        .iter()
+                        .any(|value| normalize_device_name(value) == old_name)
+                })
+                .unwrap_or(false);
+        let tag_matches = renaming && tags.iter().any(|tag| tag.eq_ignore_ascii_case(&old_tag));
+        let missing_device_identity = fill_missing && !has_device_metadata;
+
+        if !metadata_matches && !tag_matches && !missing_device_identity {
+            continue;
+        }
+
+        if renaming {
+            tags.retain(|tag| {
+                !tag.eq_ignore_ascii_case(&old_tag)
+                    && !tag.eq_ignore_ascii_case(&format!("Device{}", old_name))
+            });
+        }
+        tags = merge_unique_tags(tags, vec![new_tag.clone()]);
+        metadata.insert("deviceName".to_string(), vec![new_name.clone()]);
+        metadata.insert("deviceTag".to_string(), vec![new_tag.clone()]);
+
+        let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
+        let metadata_json = serde_json::to_string(&metadata).unwrap_or_else(|_| "{}".into());
+        sqlx::query("UPDATE clipboard_items SET tags = ?1, metadata = ?2 WHERE id = ?3")
+            .bind(tags_json)
+            .bind(metadata_json)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        changed_count += 1;
+    }
+
+    if changed_count > 0 {
+        println!(
+            "[EasyCPTrans] Device identity synced: old={}, new={}, updated_items={}",
+            old_tag, new_tag, changed_count
+        );
+        emit_changed(app).await;
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigResponse {
@@ -2126,6 +2335,7 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
 pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), String> {
     let conf_path = app.path().app_data_dir().unwrap().join("config.json");
     let mut merged = read_app_config(&app);
+    let old_device_name = merged.device_name.clone();
 
     if let Some(value) = config.cache_path {
         merged.cache_path = value;
@@ -2191,7 +2401,7 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
         merged.webdav_sync_enabled = value;
     }
     if let Some(value) = config.device_name {
-        merged.device_name = value;
+        merged.device_name = normalize_device_name(&value);
     }
     if let Some(value) = config.managed_tags {
         merged.managed_tags =
@@ -2212,5 +2422,67 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
 
     let data = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
     std::fs::write(&conf_path, data).map_err(|e| e.to_string())?;
+    sync_device_identity_rename(&app, &old_device_name, &merged.device_name, true).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rename_device_tag(app: AppHandle, from: String, to: String) -> Result<(), String> {
+    let cleaned_from = normalize_device_name(&from);
+    let cleaned_to = normalize_device_name(&to);
+    if cleaned_from == cleaned_to {
+        return Ok(());
+    }
+
+    let state = app.state::<AppState>();
+    let rows = sqlx::query("SELECT metadata, tags FROM clipboard_items")
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let metadata = parse_metadata(row.try_get("metadata").ok());
+        let tags = parse_tags(row.try_get("tags").ok());
+        let has_source = metadata
+            .get("deviceName")
+            .map(|values| {
+                values
+                    .iter()
+                    .any(|value| normalize_device_name(value).eq_ignore_ascii_case(&cleaned_from))
+            })
+            .unwrap_or(false)
+            || tags
+                .iter()
+                .any(|tag| normalize_device_name(tag).eq_ignore_ascii_case(&cleaned_from));
+        let conflicts = metadata
+            .get("deviceName")
+            .map(|values| {
+                values
+                    .iter()
+                    .any(|value| normalize_device_name(value).eq_ignore_ascii_case(&cleaned_to))
+            })
+            .unwrap_or(false)
+            || tags
+                .iter()
+                .any(|tag| normalize_device_name(tag).eq_ignore_ascii_case(&cleaned_to));
+        if conflicts && !has_source {
+            return Err(format!("Device name \"{}\" already exists.", cleaned_to));
+        }
+    }
+
+    let mut merged = read_app_config(&app);
+    let should_update_config = merged
+        .device_name
+        .trim()
+        .eq_ignore_ascii_case(&cleaned_from);
+
+    sync_device_identity_rename(&app, &cleaned_from, &cleaned_to, false).await?;
+
+    if should_update_config {
+        merged.device_name = cleaned_to.clone();
+        let conf_path = app.path().app_data_dir().unwrap().join("config.json");
+        let data = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
+        std::fs::write(&conf_path, data).map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }

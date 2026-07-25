@@ -123,7 +123,7 @@
   flex: 1;
   gap: 4px;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   scrollbar-width: none;
 }
 
@@ -133,6 +133,7 @@
 
 .eacptrans-filter-tab {
   display: inline-flex;
+  position: relative;
   flex-shrink: 0;
   align-items: center;
   gap: 6px;
@@ -173,6 +174,7 @@
 .dot-links { background: #d83b01; }
 .dot-code { background: #5c2d91; }
 .dot-tag { background: #0f6cbd; }
+.dot-device { background: #8764b8; }
 .dot-settings { background: #8a8a8a; }
 
 .eacptrans-tag-selector-panel {
@@ -903,6 +905,12 @@
   color: #5a5a5a;
 }
 
+.eacptrans-tag-chip.is-device {
+  border-color: #ddcff5;
+  background: #f5efff;
+  color: #6b3fa0;
+}
+
 .eacptrans-type-badge {
   border-radius: 10px;
   padding: 2px 9px;
@@ -925,7 +933,7 @@
 .eacptrans-settings-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
 }
 
@@ -958,6 +966,7 @@
 .eacptrans-settings-msg {
   font-size: 12px;
   color: #6a6a6a;
+  line-height: 1.45;
 }
 
 .eacptrans-field {
@@ -996,7 +1005,7 @@
 .eacptrans-settings-cols {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .eacptrans-settings-actions {
@@ -1090,6 +1099,20 @@
   background: #fff;
   padding: 0 12px;
   outline: none;
+}
+
+.eacptrans-tag-manage-create input.eacptrans-tag-input-error,
+.eacptrans-tag-manage-actions input.eacptrans-tag-input-error {
+  border-color: #c50f1f;
+  background: #fff7f7;
+  box-shadow: 0 0 0 1px #c50f1f33;
+  animation: eacptrans-shake 0.28s ease-in-out;
+}
+
+@keyframes eacptrans-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX(4px); }
 }
 
 .eacptrans-tag-manage-empty {

@@ -35,6 +35,9 @@ export const api = {
   setTags: (id: number, tags: string[]) =>
     invoke<string[]>("set_tags", { id, tags }),
 
+  renameDeviceTag: (from: string, to: string) =>
+    invoke<void>("rename_device_tag", { from, to }),
+
   markUsed: (id: number) => invoke<void>("mark_used", { id }),
 
   updateTextItem: (id: number, content: string) =>

@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod auto_tag;
-pub mod regex_extract;
 pub mod security;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,7 +90,6 @@ impl Default for Pipeline {
     fn default() -> Self {
         Self::new()
             .with(Box::new(security::SecurityFilter::default()))
-            .with(Box::new(regex_extract::RegexExtractor))
             .with(Box::new(auto_tag::AutoTagger))
     }
 }

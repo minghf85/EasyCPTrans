@@ -13,7 +13,9 @@ import {
   Files,
   GripHorizontal,
   Link2,
+  Monitor,
   Pin,
+  RefreshCw,
   Tags,
   Search,
   Settings2,
@@ -28,6 +30,7 @@ import { ErrorBanner } from "./components/ErrorBanner";
 import { PasswordPromptModal } from "./components/PasswordPromptModal";
 import { QuickTextEditorPage } from "./components/QuickTextEditorPage";
 import { SettingsModal } from "./components/SettingsModal";
+import type { SettingsModalHandle } from "./components/SettingsModal";
 import { TagManagementPage } from "./components/TagManagementPage";
 import { resetClipboardStack, useClipboardWatcher, setInjectedOverrideSig } from "./hooks/useClipboardWatcher";
 import { useHistory } from "./hooks/useHistory";
@@ -56,8 +59,13 @@ const SYSTEM_TAGS: Array<ManagedTag & { key: ActiveView }> = [
   { id: "sys-text", name: "Text", common: true, color: "#0078d4", system: true, key: "text" },
   { id: "sys-image", name: "Image", common: true, color: "#107c10", system: true, key: "image" },
   { id: "sys-file", name: "File", common: true, color: "#7b4f9d", system: true, key: "file" },
+  { id: "sys-pinned", name: "Pinned", common: true, color: "#d83b01", system: true, key: "pinned" },
 ];
-const LEGACY_SYSTEM_TAG_IDS = new Set(["sys-pinned", "sys-url", "sys-code"]);
+const FUNCTIONAL_TAGS: ManagedTag[] = [
+  { id: "sys-word", name: "Word", common: true, color: "#0067c0", system: true },
+  { id: "sys-private", name: "Private", common: true, color: "#a4262c", system: true },
+];
+const LEGACY_SYSTEM_TAG_IDS = new Set(["sys-url", "sys-code"]);
 const LEGACY_SYSTEM_TAG_NAMES = new Set(["important", "links", "code"]);
 const BASE_TAB_LIST: Array<{
   key: Scope;
@@ -69,6 +77,18 @@ const BASE_TAB_LIST: Array<{
 ];
 
 type ActiveView = Scope | "tag-selector" | "tag-manager" | "settings" | `tag:${string}`;
+
+function deviceTagId(name: string) {
+  return `sys-device-${name.trim().toLowerCase()}`;
+}
+
+function isReservedFunctionalTagName(name: string) {
+  return ["text", "image", "file", "word", "private", "privacy", "pinned"].includes(name.trim().toLowerCase());
+}
+
+function isDeviceSystemTag(tag: ManagedTag) {
+  return tag.id?.startsWith("sys-device-") ?? false;
+}
 
 function sanitizeManagedTags(tags: ManagedTag[]) {
   const normalized = new Map<string, ManagedTag>();
@@ -98,11 +118,19 @@ function sanitizeManagedTags(tags: ManagedTag[]) {
       next = { ...next, id: "sys-image", name: "Image", system: true };
     } else if (lowerId === "sys-file" || lowerName === "files" || lowerName === "file") {
       next = { ...next, id: "sys-file", name: "File", system: true };
+    } else if (lowerId === "sys-pinned" || lowerName === "pinned") {
+      next = { ...next, id: "sys-pinned", name: "Pinned", system: true };
+    } else if (lowerId === "sys-word" || lowerName === "word") {
+      next = { ...next, id: "sys-word", name: "Word", system: true };
+    } else if (lowerId === "sys-private" || lowerName === "private" || lowerName === "privacy") {
+      next = { ...next, id: "sys-private", name: "Private", system: true };
+    } else if (lowerId.startsWith("sys-device-")) {
+      next = { ...next, system: true };
     } else if (next.system) {
       next = { ...next, id: undefined, system: false };
     }
 
-    normalized.set(next.id ?? next.name.toLowerCase(), next);
+    normalized.set(next.system ? next.name.toLowerCase() : next.id ?? next.name.toLowerCase(), next);
   }
 
   return Array.from(normalized.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -189,6 +217,8 @@ function MainApp() {
   const [privacyBusy, setPrivacyBusy] = useState(false);
   const [privacyError, setPrivacyError] = useState<string | null>(null);
   const [sessionPrivacyPassword, setSessionPrivacyPassword] = useState<string | null>(null);
+  const settingsModalRef = useRef<SettingsModalHandle | null>(null);
+  const [settingsSaveState, setSettingsSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   useEffect(() => {
     api
@@ -270,7 +300,7 @@ function MainApp() {
     setPage(0);
   }, [search, scope, activeTags, advancedFilters, activeView]);
 
-  const { history } = useHistory(historyLimit, setErrorMsg);
+  const { history, reload: reloadHistory } = useHistory(historyLimit, setErrorMsg);
   useClipboardWatcher(0, setErrorMsg);
   const sourceHistory = history;
   const filterState = { search, scope, activeTags, ...advancedFilters };
@@ -286,13 +316,30 @@ function MainApp() {
   );
   const allKnownTags = useMemo(() => {
     const map = new Map<string, ManagedTag>();
+    const deviceNames = new Set(
+      sourceHistory
+        .map((item) => item.metadata?.deviceName?.[0]?.trim())
+        .filter((name): name is string => Boolean(name)),
+    );
+    for (const deviceName of deviceNames) {
+      map.set(deviceName.toLowerCase(), {
+        id: deviceTagId(deviceName),
+        name: deviceName,
+        common: true,
+        color: "#8764b8",
+        system: true,
+      });
+    }
     for (const tag of SYSTEM_TAGS) {
-      map.set(tag.id ?? tag.name.toLowerCase(), { ...tag });
+      map.set(tag.name.toLowerCase(), { ...tag });
+    }
+    for (const tag of FUNCTIONAL_TAGS) {
+      map.set(tag.name.toLowerCase(), { ...tag });
     }
     for (const tag of managedTags) {
       const cleaned = tag.name.trim();
       if (!cleaned) continue;
-      const key = tag.id ?? cleaned.toLowerCase();
+      const key = tag.system ? cleaned.toLowerCase() : tag.id ?? cleaned.toLowerCase();
       const base = map.get(key);
       map.set(key, {
         ...base,
@@ -310,17 +357,24 @@ function MainApp() {
         !LEGACY_SYSTEM_TAG_NAMES.has(lower) &&
         !map.has(lower)
       ) {
+        const isDeviceTag = deviceNames.has(cleaned);
         map.set(cleaned.toLowerCase(), {
+          id: isDeviceTag ? deviceTagId(cleaned) : undefined,
           name: cleaned,
-          common: false,
-          color: DEFAULT_TAG_COLOR,
-          system: false,
+          common: isDeviceTag,
+          color: isDeviceTag ? "#8764b8" : DEFAULT_TAG_COLOR,
+          system: isDeviceTag,
         });
       }
     }
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [managedTags, tagCounts]);
+  }, [managedTags, sourceHistory, tagCounts]);
   const tabList = useMemo(() => {
+    const deviceNames = new Set(
+      sourceHistory
+        .map((item) => item.metadata?.deviceName?.[0]?.trim())
+        .filter((name): name is string => Boolean(name)),
+    );
     const systemTabs = SYSTEM_TAGS.map((systemTag) => {
       const current = allKnownTags.find((tag) => tag.id === systemTag.id) ?? systemTag;
       return current.common
@@ -343,6 +397,23 @@ function MainApp() {
           }
         : null;
     }).filter(Boolean) as Array<{ key: ActiveView; label: string; dotClass: string; icon: typeof FileText }>;
+    const deviceTabs = allKnownTags
+      .filter((tag) => tag.system && deviceNames.has(tag.name))
+      .map((tag) => ({
+        key: `tag:${tag.name}` as const,
+        label: `#${tag.name}`,
+        dotClass: "dot-device",
+        icon: Monitor,
+      }));
+    const functionalTabs = allKnownTags
+      .filter((tag) => tag.system && (tag.id === "sys-word" || tag.id === "sys-private"))
+      .filter((tag) => tag.common)
+      .map((tag) => ({
+        key: `tag:${tag.name}` as const,
+        label: `#${tag.name}`,
+        dotClass: "dot-tag",
+        icon: Tags,
+      }));
     const customCommonTabs = allKnownTags
       .filter((tag) => tag.common && !tag.system)
       .map((tag) => ({
@@ -354,14 +425,23 @@ function MainApp() {
     return [
       ...BASE_TAB_LIST,
       ...systemTabs,
+      ...deviceTabs,
+      ...functionalTabs,
       ...customCommonTabs,
       { key: "tag-selector" as const, label: "Tags", dotClass: "dot-tag", icon: Tags },
       { key: "tag-manager" as const, label: "Tag Admin", dotClass: "dot-tag", icon: Tags },
       { key: "settings" as const, label: "Settings", dotClass: "dot-settings", icon: Settings2 },
     ];
-  }, [allKnownTags]);
+  }, [allKnownTags, sourceHistory]);
   const selectableTags = useMemo(
     () => allKnownTags.filter((tag) => !tag.system),
+    [allKnownTags],
+  );
+  const tagColorMap = useMemo(
+    () =>
+      Object.fromEntries(
+        allKnownTags.map((tag) => [tag.name.toLowerCase(), tag.color || DEFAULT_TAG_COLOR]),
+      ),
     [allKnownTags],
   );
 
@@ -857,6 +937,12 @@ function MainApp() {
     if (allKnownTags.some((value) => value.name.toLowerCase() === cleaned.toLowerCase())) {
       throw new Error("Tag already exists.");
     }
+    if (isReservedFunctionalTagName(cleaned)) {
+      throw new Error("This tag is managed automatically.");
+    }
+    if (sourceHistory.some((item) => item.metadata?.deviceName?.some((name) => name === cleaned))) {
+      throw new Error("Device tags are managed automatically.");
+    }
     await saveManagedTags([...allKnownTags, { name: cleaned, common: false, color: DEFAULT_TAG_COLOR }]);
   };
 
@@ -869,9 +955,29 @@ function MainApp() {
     ) {
       throw new Error("Tag already exists.");
     }
+    if (isReservedFunctionalTagName(cleaned)) {
+      throw new Error("This tag is managed automatically.");
+    }
 
     setTagManageBusy(true);
     try {
+      const sourceTag = allKnownTags.find((tag) => tag.name === from);
+      if (sourceTag && isDeviceSystemTag(sourceTag)) {
+        await api.renameDeviceTag(from, cleaned);
+        const nextManagedTags = managedTags.filter((tag) => tag.name.toLowerCase() !== from.toLowerCase());
+        nextManagedTags.push({
+          id: deviceTagId(cleaned),
+          name: cleaned,
+          common: sourceTag.common,
+          color: sourceTag.color || "#8764b8",
+          system: true,
+        });
+        await saveManagedTags(nextManagedTags);
+        await reloadHistory();
+        setActiveTags((prev) => prev.map((tag) => (tag === from ? cleaned : tag)));
+        setActiveView((prev) => (prev === `tag:${from}` ? (`tag:${cleaned}` as ActiveView) : prev));
+        return;
+      }
       const affected = sourceHistory.filter((item) => item.tags.includes(from));
       await Promise.all(
         affected.map((item) =>
@@ -1128,6 +1234,23 @@ function MainApp() {
   }, [activeView, currentPageItems, privacyAction, quickTagItemId, searchOpen, selectedId, queuedIds, sourceHistory, cardRows, page, totalPages, alwaysOnTop, itemTagShortcut, itemPrivateShortcut, itemPinShortcut, itemDeleteShortcut]);
 
   const onTabClick = (key: ActiveView) => {
+    if (key === "settings" && activeView === "settings") {
+      if (settingsSaveState === "saving") return;
+      const saveTask = settingsModalRef.current?.save();
+      if (!saveTask) return;
+      setSettingsSaveState("saving");
+      void saveTask
+        .then(() => {
+          setSettingsSaveState("saved");
+          window.setTimeout(() => setSettingsSaveState("idle"), 1200);
+        })
+        .catch((err) => {
+          setSettingsSaveState("error");
+          setErrorMsg("Save settings failed: " + String(err));
+          window.setTimeout(() => setSettingsSaveState("idle"), 1600);
+        });
+      return;
+    }
     if (key === "tag-selector") {
       if (tagSelectorOpen) {
         setTagSelectorOpen(false);
@@ -1242,6 +1365,12 @@ function MainApp() {
           <div className="eacptrans-filter-scroll" id="filter-scroll">
             {tabList.map(({ key, label, dotClass, icon: Icon }) => {
               const active = key === "tag-selector" ? tagSelectorOpen : activeView === key;
+              const TabIcon =
+                key === "settings" && settingsSaveState === "saving"
+                  ? RefreshCw
+                  : key === "settings" && settingsSaveState === "saved"
+                    ? CheckSquare
+                    : Icon;
               const systemConfig = SYSTEM_TAGS.find((tag) => tag.key === key)
                 ? allKnownTags.find((tag) => tag.id === SYSTEM_TAGS.find((entry) => entry.key === key)?.id)
                 : null;
@@ -1269,7 +1398,7 @@ function MainApp() {
                       }
                     />
                     <span>{label}</span>
-                    <Icon className="h-3.5 w-3.5" />
+                    <TabIcon className={`h-3.5 w-3.5 ${key === "settings" && settingsSaveState === "saving" ? "animate-spin" : ""}`} />
                   </button>
                   {key === "tag-selector" && tagSelectorOpen && (
                     <div className="eacptrans-tag-inline-list">
@@ -1317,7 +1446,7 @@ function MainApp() {
         }`}
       >
         {activeView === "settings" ? (
-          <SettingsModal onSaved={handleSettingsSaved} />
+          <SettingsModal ref={settingsModalRef} onSaved={handleSettingsSaved} />
         ) : activeView === "tag-manager" ? (
           <TagManagementPage
             tags={allKnownTags}
@@ -1355,6 +1484,7 @@ function MainApp() {
                   key={item.id}
                   item={item}
                   availableTags={selectableTags.map((tag) => tag.name)}
+                  tagColors={tagColorMap}
                   isSelected={selectedId === item.id}
                   isCopied={copiedId === item.id}
                   quickSlot={

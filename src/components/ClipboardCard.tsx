@@ -53,6 +53,20 @@ function sourceApp(item: HistoryItem) {
   return item.metadata?.sourceApp?.[0] || "EasyCPTrans";
 }
 
+function isDeviceTag(item: HistoryItem, tag: string) {
+  return item.metadata?.deviceName?.some((name) => name.trim().toLowerCase() === tag.trim().toLowerCase()) ?? false;
+}
+
+function isRedundantMetaTag(item: HistoryItem, tag: string) {
+  const normalized = tag.trim().toLowerCase();
+  if (["text", "image", "file"].includes(normalized)) {
+    return normalized === item.contentType;
+  }
+  if (normalized === "pinned") return item.pinned;
+  if (normalized === "private" || normalized === "privacy") return item.isPrivate;
+  return false;
+}
+
 function translationStatus(item: HistoryItem) {
   return item.metadata?.translationStatus?.[0] || null;
 }
@@ -132,6 +146,7 @@ function renderTranslationRichText(content: string) {
 interface Props {
   item: HistoryItem;
   availableTags: string[];
+  tagColors?: Record<string, string>;
   isSelected?: boolean;
   isCopied: boolean;
   quickSlot?: number | null;
@@ -151,6 +166,7 @@ interface Props {
 export function ClipboardCard({
   item,
   availableTags,
+  tagColors = {},
   isSelected = false,
   isCopied,
   quickSlot = null,
@@ -179,6 +195,26 @@ export function ClipboardCard({
   const translationState = translationStatus(item);
   const translationWord = translationQuery(item);
   const isTranslationItem = item.tags.includes("Word") || Boolean(translationState || translationWord);
+  const displayTags = item.tags.filter((tag) => !isRedundantMetaTag(item, tag));
+  const tagColorFor = (tag: string) => tagColors[tag.toLowerCase()];
+  const tagStyleFor = (tag: string) => {
+    const tagColor = tagColorFor(tag);
+    return tagColor
+      ? {
+          borderColor: `${tagColor}55`,
+          background: `${tagColor}14`,
+          color: tagColor,
+        }
+      : undefined;
+  };
+  const typeTagName =
+    item.contentType === "text"
+      ? "Text"
+      : item.contentType === "image"
+        ? "Image"
+        : item.contentType === "file"
+          ? "File"
+          : typeLabel;
 
   useEffect(() => {
     if (tagMenuOpen) {
@@ -452,7 +488,7 @@ export function ClipboardCard({
       {renderBody()}
 
       <div className="eacptrans-meta-strip" onClick={(e) => e.stopPropagation()} onWheel={(event) => stopOuterScroll(event, "x")}>
-        <span className={`eacptrans-meta-item eacptrans-type-badge ${typeBadgeClass}`}>{typeLabel}</span>
+        <span className={`eacptrans-meta-item eacptrans-type-badge ${typeBadgeClass}`} style={tagStyleFor(typeTagName)}>{typeLabel}</span>
         <span className="eacptrans-meta-item" title={formatExactTime(item.lastUsedAt)}>
           <Clock3 className="h-3 w-3" />
           {formatTime(item.lastUsedAt)}
@@ -461,22 +497,28 @@ export function ClipboardCard({
         {width && height && <span className="eacptrans-meta-item">{width} x {height}</span>}
         {totalSize && <span className="eacptrans-meta-item">{formatBytes(parseInt(totalSize, 10))}</span>}
         {item.pinned && (
-          <span className="eacptrans-meta-item">
+          <span className="eacptrans-meta-item" style={tagStyleFor("Pinned")}>
             <Pin className="h-3 w-3" />
             Pinned
           </span>
         )}
         {hasPrivacy && (
-          <span className="eacptrans-meta-item">
+          <span className="eacptrans-meta-item" style={tagStyleFor("Private")}>
             <EyeOff className="h-3 w-3" />
             Private
           </span>
         )}
-        {item.tags.map((tag) => (
-          <span key={tag} className="eacptrans-tag-chip">
-            <Tag className="h-3 w-3" />#{tag}
-          </span>
-        ))}
+        {displayTags.map((tag) => {
+          return (
+            <span
+              key={tag}
+              className={`eacptrans-tag-chip ${isDeviceTag(item, tag) ? "is-device" : ""}`}
+              style={tagStyleFor(tag)}
+            >
+              <Tag className="h-3 w-3" />#{tag}
+            </span>
+          );
+        })}
       </div>
     </article>
   );
