@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent, type WheelEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type WheelEvent } from "react";
 import {
   Check,
   CheckSquare,
@@ -156,6 +156,7 @@ interface Props {
   onTogglePin: (id: number) => void;
   onDelete: (id: number) => void;
   onToggleTag: (id: number, tag: string) => void;
+  onCreateTag?: (id: number, tag: string) => Promise<void>;
   onEnablePrivacy: (id: number) => void;
   onDisablePrivacy: (id: number) => void;
   onQuickEdit: (item: HistoryItem) => void;
@@ -176,6 +177,7 @@ export function ClipboardCard({
   onTogglePin,
   onDelete,
   onToggleTag,
+  onCreateTag,
   onEnablePrivacy,
   onDisablePrivacy,
   onQuickEdit,
@@ -184,6 +186,11 @@ export function ClipboardCard({
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [creatingTag, setCreatingTag] = useState(false);
+  const [newTagValue, setNewTagValue] = useState("");
+  const [newTagError, setNewTagError] = useState("");
+  const [newTagBusy, setNewTagBusy] = useState(false);
+  const newTagInputRef = useRef<HTMLInputElement | null>(null);
   const typeLabel = useMemo(() => detectLabel(item), [item]);
   const codeLike = useMemo(() => isCodeLike(item), [item]);
   const typeBadgeClass = codeLike ? "type-code" : `type-${item.contentType}`;
@@ -226,9 +233,16 @@ export function ClipboardCard({
     }
   }, [tagMenuOpen]);
 
+  useEffect(() => {
+    if (creatingTag) newTagInputRef.current?.focus();
+  }, [creatingTag]);
+
   const closeMenus = () => {
     setMenuOpen(false);
     setTagPickerOpen(false);
+    setCreatingTag(false);
+    setNewTagValue("");
+    setNewTagError("");
     onTagMenuClose?.();
   };
 
@@ -239,6 +253,35 @@ export function ClipboardCard({
     event.preventDefault();
     event.stopPropagation();
     action();
+  };
+
+  const handleNewTagSubmit = async () => {
+    const value = newTagValue.trim();
+    if (!value || newTagBusy || !onCreateTag) return;
+    setNewTagBusy(true);
+    setNewTagError("");
+    try {
+      await onCreateTag(item.id, value);
+      setNewTagValue("");
+      setCreatingTag(false);
+    } catch (err) {
+      setNewTagError(String(err));
+    } finally {
+      setNewTagBusy(false);
+    }
+  };
+
+  const handleNewTagKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void handleNewTagSubmit();
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setCreatingTag(false);
+      setNewTagValue("");
+      setNewTagError("");
+    }
   };
 
   const stopOuterScroll = (event: WheelEvent<HTMLElement>, axis: "x" | "y") => {
@@ -384,7 +427,7 @@ export function ClipboardCard({
               onClick={(e) => e.stopPropagation()}
               onWheel={(event) => stopOuterScroll(event, "y")}
             >
-              {availableTags.length === 0 ? (
+              {availableTags.length === 0 && !creatingTag ? (
                 <div className="eacptrans-card-menu-empty">No tags available</div>
               ) : (
                 availableTags.map((tag) => {
@@ -402,6 +445,41 @@ export function ClipboardCard({
                     </button>
                   );
                 })
+              )}
+              {creatingTag ? (
+                <div className="eacptrans-card-tag-new">
+                  <input
+                    ref={newTagInputRef}
+                    value={newTagValue}
+                    onChange={(event) => {
+                      setNewTagValue(event.target.value);
+                      setNewTagError("");
+                    }}
+                    onKeyDown={handleNewTagKeyDown}
+                    placeholder="New Tag"
+                    disabled={newTagBusy}
+                  />
+                  <button
+                    className="eacptrans-card-tag-new-save"
+                    onClick={(event) => handleMenuAction(event, () => void handleNewTagSubmit())}
+                    disabled={newTagBusy || !newTagValue.trim()}
+                  >
+                    {newTagBusy ? "..." : "Add"}
+                  </button>
+                  {newTagError && <span className="eacptrans-card-tag-new-error">{newTagError}</span>}
+                </div>
+              ) : (
+                <button
+                  className="eacptrans-card-tag-option eacptrans-card-tag-new-option"
+                  onClick={(event) => handleMenuAction(event, () => {
+                    setCreatingTag(true);
+                    setNewTagError("");
+                  })}
+                  disabled={!onCreateTag}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  New Tag
+                </button>
               )}
             </div>
           )}

@@ -849,6 +849,18 @@ function MainApp() {
     }
   };
 
+  const handleCreateAndAttachTag = async (id: number, tag: string) => {
+    const cleaned = tag.trim();
+    if (!cleaned) return;
+    await handleCreateManagedTag(cleaned);
+    const item = sourceHistory.find((entry) => entry.id === id);
+    if (!item) return;
+    const exists = item.tags.some((value) => value.toLowerCase() === cleaned.toLowerCase());
+    if (!exists) {
+      await api.setTags(id, [...item.tags, cleaned]);
+    }
+  };
+
   const handleSettingsSaved = (settings: {
     shortcut: string;
     queueStepShortcut: string;
@@ -1518,6 +1530,7 @@ function MainApp() {
                   onTogglePin={handleTogglePin}
                   onDelete={handleDelete}
                   onToggleTag={handleToggleTag}
+                  onCreateTag={handleCreateAndAttachTag}
                   onEnablePrivacy={handleEnablePrivacy}
                   onDisablePrivacy={handleDisablePrivacy}
                   onQuickEdit={handleQuickEdit}
