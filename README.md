@@ -20,13 +20,17 @@ English · [简体中文](./README_ZH_CN.md) · [繁體中文](./README_ZH_TW.md
 
 - **📋 Clipboard History** — Automatically records copied text, images, and files, allowing you to browse and paste anytime.
 - **🌐 On-the-fly Translation** — Select an English word or phrase, query the local dictionary with one hotkey, and save the result as a reusable card.
+- **🔍 OCR Text Recognition** — Pull the text out of a screenshot and use it like normal text: copy it, paste it, search it, or translate it.
+- **🤖 API Translation** — Send any text item through an OpenAI-compatible endpoint for a full-sentence translation.
 - **🏷️ Tag Management** — Built-in type tags and user-defined tags, supporting multi-tag AND filtering.
 - **📌 Pin & Private** — Pin important items to the top; encrypt sensitive content for secure storage.
 - **🔗 Queue Paste** — Add multiple items to a queue and paste them one by one in order — perfect for bulk form filling.
 - **📦 Stack Copy** — Merge multiple copied snippets into a single item to preserve context.
 - **🖥️ Multi-Device Sync** — Sync data via WebDAV, with each item automatically tagged by source device.
+- **📡 LAN Sync** — Discover devices on the same network via mDNS and sync with a shared pairing code.
 - **🔍 Advanced Search** — Combine keywords, phrases, tags, types, time ranges, and sizes for precise filtering.
 - **⚡ Global Hotkeys** — Every action is accessible via keyboard shortcuts — efficiency first.
+- **💾 Memory Readout** — Optionally show the app's current memory usage in the toolbar.
 
 ---
 
@@ -88,6 +92,7 @@ NSIS installer is recommended for regular users.
 | `T` | Open / close the current Item's tag menu |
 | `M` | Toggle private state |
 | `P` | Toggle pinned state |
+| `O` | Recognize text in the selected image |
 | `Delete` | Delete current Item |
 
 ---
@@ -142,6 +147,49 @@ await api.convertEcdictCsvToSqlite(
 ```
 
 The converted SQLite table is named `stardict`, with fields matching the CSV header, plus an extra `sw` field for fuzzy matching.
+
+---
+
+## 🔍 OCR Text Recognition
+
+Text inside a screenshot — an error message, a code snippet, an invoice, a chat log — is useless in a terminal or an editor. OCR turns it into real text you can copy, paste, search and translate.
+
+### How to Run It
+
+| Entry point | Action |
+| --- | --- |
+| Image card | Hover the image and click **Extract text** in the bottom-right corner |
+| Card menu | `⌄` → `OCR` |
+| Keyboard | Select an image item and press `O` |
+
+### The Review Panel
+
+Recognition opens a review panel:
+
+| Action | Description |
+| --- | --- |
+| Edit the text | The result is editable — fixes are saved automatically |
+| `Copy text` | Put the recognized text on the clipboard |
+| `Paste text` | Write it to the clipboard and paste it into the previous window |
+| `Save as text item` | Keep it as a standalone text card in the history (identical text is merged, never duplicated) |
+| `Translate` | Send it through API translation (enable it in Settings first) |
+| `Recognize again` | Retry, optionally with a different recognition language |
+
+The image item keeps a `N chars` badge in its meta row, and its text stays searchable from the main search box.
+
+### Automatic Recognition
+
+`Settings → OCR Text Recognition → Recognize text automatically after copying an image` is **on by default**: every screenshot is recognized in the background, so you can later find that screenshot by typing any word that was inside it. Recognition runs locally with the Windows engine — nothing is uploaded.
+
+### Language Packs
+
+Recognition uses the OCR engine built into Windows. If Chinese (or any other script) comes out garbled, install the language pack for it:
+
+```
+Settings → Time & language → Language & region → (language) → Language options → Optical character recognition
+```
+
+`Settings → OCR Text Recognition → Recognition language` lists what is installed; leave it on `Automatic` to follow your Windows languages.
 
 ---
 
@@ -260,6 +308,8 @@ After sync, you can filter Items by device tag.
 | Data Path | `Settings → General → Data path` | Specify the data storage directory |
 | Hotkeys | `Settings → Shortcuts` | Customize all hotkeys |
 | Dictionary Path | `Settings → Translation → ECDICT path` | Specify the ECDICT dictionary file path |
+| OCR | `Settings → OCR Text Recognition` | Enable OCR, automatic recognition, recognition language |
+| Memory usage | `Settings → General → Show memory usage` | Show the current memory footprint in the toolbar |
 | WebDAV | `Settings → WebDAV` | Configure multi-device sync |
 
 ---
@@ -311,8 +361,8 @@ pnpm tauri build
 ## 🗺️ Roadmap
 
 - [ ] Cross-platform support (macOS / Linux)
-- [ ] OCR image text recognition
-- [ ] AI-assisted translation
+- [x] OCR image text recognition
+- [x] AI-assisted translation
 
 ---
 
