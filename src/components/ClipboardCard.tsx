@@ -9,6 +9,7 @@ import {
   Folder,
   Image as ImageIcon,
   Languages,
+  Loader2,
   Monitor,
   MousePointerClick,
   PenSquare,
@@ -166,6 +167,11 @@ interface Props {
   onEnablePrivacy: (id: number) => void;
   onDisablePrivacy: (id: number) => void;
   onQuickEdit: (item: HistoryItem) => void;
+  /** Recognizes the image (or opens the existing result) in the review panel. */
+  onOcrOpen: (item: HistoryItem) => void;
+  onNotify: (message: string) => void;
+  ocrBusy?: boolean;
+  apiTranslateEnabled?: boolean;
   tagMenuOpen?: boolean;
   onTagMenuClose?: () => void;
 }
@@ -188,6 +194,10 @@ export const ClipboardCard = memo(function ClipboardCard({
   onEnablePrivacy,
   onDisablePrivacy,
   onQuickEdit,
+  onOcrOpen,
+  onNotify,
+  ocrBusy = false,
+  apiTranslateEnabled = false,
   tagMenuOpen = false,
   onTagMenuClose,
 }: Props) {
@@ -213,6 +223,7 @@ export const ClipboardCard = memo(function ClipboardCard({
   const height = item.metadata?.height?.[0];
   const translationState = translationStatus(item);
   const translationWord = translationQuery(item);
+  const ocrText = item.metadata?.ocrText?.[0] ?? "";
   const isTranslationItem = item.tags.includes("Word") || Boolean(translationState || translationWord);
   const displayTags = item.tags.filter((tag) => !isRedundantMetaTag(item, tag));
   const tagColorFor = (tag: string) => tagColors[tag.toLowerCase()];
@@ -360,12 +371,34 @@ export const ClipboardCard = memo(function ClipboardCard({
           ) : (
             <>
               <img src={imageSrc} alt="Clipboard content" className="eacptrans-image-preview" loading="lazy" decoding="async" />
-              {item.metadata?.ocrText?.[0] && (
-                <div className="eacptrans-image-ocr-overlay" title={item.metadata.ocrText[0]}>
-                  <ScanText className="h-3 w-3" />
-                  <span>{item.metadata.ocrText[0]}</span>
-                </div>
-              )}
+              <button
+                className={`eacptrans-image-ocr-btn ${ocrBusy ? "running" : ""} ${ocrText ? "has-text" : ""}`}
+                disabled={ocrBusy}
+                title={locale ? tr(locale, ocrText ? "ocrText" : "ocrScan") : "OCR"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOcrOpen(item);
+                }}
+              >
+                {ocrBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ScanText className="h-3.5 w-3.5" />
+                )}
+                <span>
+                  {ocrBusy
+                    ? locale
+                      ? tr(locale, "ocrRunning")
+                      : "Recognizing…"
+                    : ocrText
+                      ? locale
+                        ? tr(locale, "ocrText")
+                        : "Recognized text"
+                      : locale
+                        ? tr(locale, "ocrScan")
+                        : "OCR"}
+                </span>
+              </button>
             </>
           )}
         </div>
@@ -595,12 +628,14 @@ export const ClipboardCard = memo(function ClipboardCard({
                 Edit
               </button>
             )}
-            {item.contentType === "text" && !hasPrivacy && (
+            {item.contentType === "text" && !hasPrivacy && apiTranslateEnabled && (
               <button
                 onClick={(event) =>
                   handleMenuAction(event, () => {
                     closeMenus();
-                    void api.translateTextApi(item.content);
+                    void api
+                      .translateTextApi(item.content)
+                      .catch((err) => onNotify(String(err)));
                   })
                 }
               >
@@ -610,15 +645,30 @@ export const ClipboardCard = memo(function ClipboardCard({
             )}
             {item.contentType === "image" && !hasPrivacy && (
               <button
+                disabled={ocrBusy}
                 onClick={(event) =>
                   handleMenuAction(event, () => {
                     closeMenus();
-                    void api.ocrImageItem(item.id);
+                    onOcrOpen(item);
                   })
                 }
               >
-                <ScanText className="h-3.5 w-3.5" />
-                {locale ? tr(locale, "ocr") : "OCR"}
+                {ocrBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ScanText className="h-3.5 w-3.5" />
+                )}
+                {ocrBusy
+                  ? locale
+                    ? tr(locale, "ocrRunning")
+                    : "Recognizing…"
+                  : ocrText
+                    ? locale
+                      ? tr(locale, "ocrText")
+                      : "Recognized text"
+                    : locale
+                      ? tr(locale, "ocr")
+                      : "OCR"}
               </button>
             )}
             <button
@@ -646,6 +696,16 @@ export const ClipboardCard = memo(function ClipboardCard({
         {chars && <span className="eacptrans-meta-item">{chars} chars</span>}
         {width && height && <span className="eacptrans-meta-item">{width} x {height}</span>}
         {totalSize && <span className="eacptrans-meta-item">{formatBytes(parseInt(totalSize, 10))}</span>}
+        {ocrText && (
+          <button
+            className="eacptrans-meta-item eacptrans-meta-ocr"
+            title={ocrText.slice(0, 300)}
+            onClick={() => onOcrOpen(item)}
+          >
+            <ScanText className="h-3 w-3" />
+            {ocrText.trim().length} {locale ? tr(locale, "ocrCharUnit") : "chars"}
+          </button>
+        )}
         {item.pinned && (
           <span className="eacptrans-meta-item" style={tagStyleFor("Pinned")}>
             <Pin className="h-3 w-3" />

@@ -14,6 +14,7 @@ mod lan_sync;
 mod ocr;
 mod pipeline;
 mod privacy;
+mod process_stats;
 mod recommend;
 mod shortcuts;
 mod sync;
@@ -433,6 +434,10 @@ pub fn run() {
             commands::translate_selected_text,
             commands::translate_text_api,
             ocr::ocr_image_item,
+            ocr::list_ocr_languages,
+            ocr::set_ocr_text,
+            ocr::create_text_item_from_ocr,
+            process_stats::get_process_stats,
             commands::convert_ecdict_csv_to_sqlite,
             commands::save_temp_image,
             commands::read_image_as_data_url,

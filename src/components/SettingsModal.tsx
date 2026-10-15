@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Cloud, Folder, RefreshCw, Shield, Sparkles, Terminal, Wifi } from "lucide-react";
+import { Cloud, Folder, RefreshCw, ScanText, Shield, Sparkles, Terminal, Wifi } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
 import { LOCALE_OPTIONS, normalizeLocale, tr, type Locale } from "../lib/i18n";
@@ -16,6 +16,7 @@ interface Props {
     itemPrivateShortcut: string;
     itemPinShortcut: string;
     itemDeleteShortcut: string;
+    itemOcrShortcut: string;
     autoPaste: boolean;
     keepWindowOpen: boolean;
     alwaysOnTop: boolean;
@@ -31,6 +32,7 @@ interface Props {
     apiTranslateModel: string;
     apiTranslateTargetLang: string;
     recommendationsEnabled: boolean;
+    showMemoryUsage: boolean;
     locale: Locale;
   }) => void;
 }
@@ -278,6 +280,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
   const [itemPrivateShortcut, setItemPrivateShortcut] = useState("M");
   const [itemPinShortcut, setItemPinShortcut] = useState("P");
   const [itemDeleteShortcut, setItemDeleteShortcut] = useState("Delete");
+  const [itemOcrShortcut, setItemOcrShortcut] = useState("O");
   const [ecdictPath, setEcdictPath] = useState("");
   const [effectiveDir, setEffectiveDir] = useState("");
   const [autoPaste, setAutoPaste] = useState(true);
@@ -298,6 +301,11 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
   const [webdavMessage, setWebdavMessage] = useState("");
 
   const [recommendationsEnabled, setRecommendationsEnabled] = useState(true);
+  const [ocrEnabled, setOcrEnabled] = useState(true);
+  const [ocrAuto, setOcrAuto] = useState(true);
+  const [ocrLanguage, setOcrLanguage] = useState("");
+  const [ocrLanguages, setOcrLanguages] = useState<Array<{ tag: string; name: string }>>([]);
+  const [showMemoryUsage, setShowMemoryUsage] = useState(false);
   const [lanSyncEnabled, setLanSyncEnabled] = useState(false);
   const [lanSyncPairingCode, setLanSyncPairingCode] = useState("");
   const [lanSyncPort, setLanSyncPort] = useState(0);
@@ -361,6 +369,10 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
     () => normalizeShortcutValue(itemDeleteShortcut, "Delete"),
     [itemDeleteShortcut],
   );
+  const normalizedItemOcrShortcut = useMemo(
+    () => normalizeShortcutValue(itemOcrShortcut, "O"),
+    [itemOcrShortcut],
+  );
 
   useEffect(() => {
     api
@@ -384,6 +396,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         const nextItemPrivateShortcut = normalizeShortcutValue(cfg.itemPrivateShortcut, "M");
         const nextItemPinShortcut = normalizeShortcutValue(cfg.itemPinShortcut, "P");
         const nextItemDeleteShortcut = normalizeShortcutValue(cfg.itemDeleteShortcut, "Delete");
+        const nextItemOcrShortcut = normalizeShortcutValue(cfg.itemOcrShortcut, "O");
         setShortcut(canonicalizeShortcut(nextShortcut));
         setQueueStepShortcut(canonicalizeShortcut(nextQueueStepShortcut));
         setQuickPastePrefix(canonicalizeShortcut(nextQuickPastePrefix));
@@ -393,6 +406,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         setItemPrivateShortcut(canonicalizeShortcut(nextItemPrivateShortcut));
         setItemPinShortcut(canonicalizeShortcut(nextItemPinShortcut));
         setItemDeleteShortcut(canonicalizeShortcut(nextItemDeleteShortcut));
+        setItemOcrShortcut(canonicalizeShortcut(nextItemOcrShortcut));
         setEcdictPath(cfg.ecdictPath || "");
         if (
           nextShortcut !== (cfg.shortcut ?? "") ||
@@ -415,6 +429,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
             itemPrivateShortcut: canonicalizeShortcut(nextItemPrivateShortcut),
             itemPinShortcut: canonicalizeShortcut(nextItemPinShortcut),
             itemDeleteShortcut: canonicalizeShortcut(nextItemDeleteShortcut),
+            itemOcrShortcut: canonicalizeShortcut(nextItemOcrShortcut),
           }).catch(console.error);
         }
         setEffectiveDir(cfg.effectiveDir || "");
@@ -428,6 +443,10 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         setApiTranslateModel(cfg.apiTranslateModel || "gpt-4o-mini");
         setApiTranslateTargetLang(cfg.apiTranslateTargetLang || "");
         setRecommendationsEnabled(cfg.recommendationsEnabled !== false);
+        setOcrEnabled(cfg.ocrEnabled !== false);
+        setOcrAuto(cfg.ocrAuto !== false);
+        setOcrLanguage(cfg.ocrLanguage || "");
+        setShowMemoryUsage(Boolean(cfg.showMemoryUsage));
         setLanSyncEnabled(Boolean(cfg.lanSyncEnabled));
         setLanSyncPairingCode(cfg.lanSyncPairingCode || "");
         setLanSyncPort(typeof cfg.lanSyncPort === "number" ? cfg.lanSyncPort : 0);
@@ -451,6 +470,13 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
       .catch((err) => {
         setPrivacyMessage(tr(selectedLocale, "privacyLoadFailed") + String(err));
       });
+  }, []);
+
+  useEffect(() => {
+    void api
+      .listOcrLanguages()
+      .then((list) => setOcrLanguages(list))
+      .catch(() => setOcrLanguages([]));
   }, []);
 
   useEffect(() => {
@@ -481,6 +507,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         itemPrivateShortcut: normalizedItemPrivateShortcut,
         itemPinShortcut: normalizedItemPinShortcut,
         itemDeleteShortcut: normalizedItemDeleteShortcut,
+        itemOcrShortcut: normalizedItemOcrShortcut,
         ecdictPath,
         locale: selectedLocale,
         autoPaste,
@@ -498,6 +525,10 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         apiTranslateModel: apiTranslateModel.trim() || "gpt-4o-mini",
         apiTranslateTargetLang: apiTranslateTargetLang.trim(),
         recommendationsEnabled,
+        ocrEnabled,
+        ocrAuto,
+        ocrLanguage: ocrLanguage.trim(),
+        showMemoryUsage,
         lanSyncEnabled,
         lanSyncPairingCode: lanSyncPairingCode.trim(),
         lanSyncPort,
@@ -528,6 +559,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         itemPrivateShortcut: normalizedItemPrivateShortcut,
         itemPinShortcut: normalizedItemPinShortcut,
         itemDeleteShortcut: normalizedItemDeleteShortcut,
+        itemOcrShortcut: normalizedItemOcrShortcut,
         autoPaste,
         keepWindowOpen: false,
         alwaysOnTop,
@@ -543,6 +575,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         apiTranslateModel,
         apiTranslateTargetLang,
         recommendationsEnabled,
+        showMemoryUsage,
         locale: selectedLocale,
       });
       setWebdavPassword("");
@@ -748,6 +781,16 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
             </label>
           </div>
 
+          <label className="eacptrans-checkrow">
+            <input
+              type="checkbox"
+              checked={showMemoryUsage}
+              onChange={(e) => setShowMemoryUsage(e.target.checked)}
+            />
+            <span>{tr(selectedLocale, "showMemoryUsage")}</span>
+          </label>
+          <p className="eacptrans-settings-note">{tr(selectedLocale, "showMemoryUsageDesc")}</p>
+
         </section>
 
         <section className="eacptrans-settings-card">
@@ -848,6 +891,15 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
             defaultValue="Delete"
             onChange={setItemDeleteShortcut}
             help={tr(selectedLocale, "selectedItemDeleteHelp")}
+            locale={selectedLocale}
+          />
+
+          <ShortcutRecorder
+            label={tr(selectedLocale, "ocrShortcut")}
+            value={itemOcrShortcut}
+            defaultValue="O"
+            onChange={setItemOcrShortcut}
+            help={tr(selectedLocale, "ocrShortcutHelp")}
             locale={selectedLocale}
           />
         </section>
@@ -1029,6 +1081,59 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
             <strong>{tr(selectedLocale, "frequentCommands")}</strong>
             <FrequentCommandsList locale={selectedLocale} />
           </div>
+        </section>
+
+        <section className="eacptrans-settings-card">
+          <div className="eacptrans-settings-head">
+            <h2>
+              <ScanText className="h-4 w-4" />
+              {tr(selectedLocale, "ocrSettings")}
+            </h2>
+            <p>{tr(selectedLocale, "ocrSettingsDesc")}</p>
+          </div>
+
+          <label className="eacptrans-checkrow">
+            <input
+              type="checkbox"
+              checked={ocrEnabled}
+              onChange={(e) => setOcrEnabled(e.target.checked)}
+            />
+            <span>{tr(selectedLocale, "ocrEnable")}</span>
+          </label>
+
+          <label className="eacptrans-checkrow">
+            <input
+              type="checkbox"
+              checked={ocrAuto}
+              disabled={!ocrEnabled}
+              onChange={(e) => setOcrAuto(e.target.checked)}
+            />
+            <span>{tr(selectedLocale, "ocrAuto")}</span>
+          </label>
+          <p className="eacptrans-settings-note">{tr(selectedLocale, "ocrAutoDesc")}</p>
+
+          <label className="eacptrans-field">
+            <span>{tr(selectedLocale, "ocrLanguage")}</span>
+            <select
+              value={ocrLanguage}
+              disabled={!ocrEnabled}
+              onChange={(event) => setOcrLanguage(event.target.value)}
+            >
+              <option value="">{tr(selectedLocale, "ocrLanguageAuto")}</option>
+              {ocrLanguages.map((entry) => (
+                <option key={entry.tag} value={entry.tag}>
+                  {entry.name} ({entry.tag})
+                </option>
+              ))}
+            </select>
+            <small>
+              {ocrLanguages.length === 0
+                ? tr(selectedLocale, "ocrNoLanguagePack")
+                : `${tr(selectedLocale, "ocrInstalledLanguages")}: ${ocrLanguages
+                    .map((entry) => entry.tag)
+                    .join(", ")}`}
+            </small>
+          </label>
         </section>
 
         <section className="eacptrans-settings-card">

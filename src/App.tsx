@@ -27,6 +27,8 @@ import "./App.css";
 import { ClipboardCard } from "./components/ClipboardCard";
 import { EmptyState } from "./components/EmptyState";
 import { ErrorBanner } from "./components/ErrorBanner";
+import { MemoryChip } from "./components/MemoryChip";
+import { OcrResultModal } from "./components/OcrResultModal";
 import { PasswordPromptModal } from "./components/PasswordPromptModal";
 import { QuickTextEditorPage } from "./components/QuickTextEditorPage";
 import { SettingsModal } from "./components/SettingsModal";
@@ -57,6 +59,7 @@ const DEFAULT_ITEM_TAG_SHORTCUT = "T";
 const DEFAULT_ITEM_PRIVATE_SHORTCUT = "M";
 const DEFAULT_ITEM_PIN_SHORTCUT = "P";
 const DEFAULT_ITEM_DELETE_SHORTCUT = "Delete";
+const DEFAULT_ITEM_OCR_SHORTCUT = "O";
 const DEFAULT_TAG_COLOR = "#0f6cbd";
 const SYSTEM_TAGS: Array<ManagedTag & { key: ActiveView }> = [
   { id: "sys-text", name: "Text", common: true, color: "#0078d4", system: true, key: "text" },
@@ -201,10 +204,16 @@ function MainApp() {
   const [itemPrivateShortcut, setItemPrivateShortcut] = useState(DEFAULT_ITEM_PRIVATE_SHORTCUT);
   const [itemPinShortcut, setItemPinShortcut] = useState(DEFAULT_ITEM_PIN_SHORTCUT);
   const [itemDeleteShortcut, setItemDeleteShortcut] = useState(DEFAULT_ITEM_DELETE_SHORTCUT);
+  const [itemOcrShortcut, setItemOcrShortcut] = useState(DEFAULT_ITEM_OCR_SHORTCUT);
   const [locale, setLocale] = useState<Locale>("zh-CN");
   const [pageSize, setPageSize] = useState(50);
   const [historyLimit, setHistoryLimit] = useState(5000);
   const [recommendationsEnabled, setRecommendationsEnabled] = useState(true);
+  const [ocrPanel, setOcrPanel] = useState<{ item: HistoryItem; text: string } | null>(null);
+  const [ocrBusyId, setOcrBusyId] = useState<number | null>(null);
+  const ocrBusyIdRef = useRef<number | null>(null);
+  const [apiTranslateEnabled, setApiTranslateEnabled] = useState(false);
+  const [showMemoryUsage, setShowMemoryUsage] = useState(false);
   const [managedTags, setManagedTags] = useState<ManagedTag[]>([]);
   const [tagManageBusy, setTagManageBusy] = useState(false);
   const [tagSelectorOpen, setTagSelectorOpen] = useState(false);
@@ -248,6 +257,7 @@ function MainApp() {
         const nextItemPrivateShortcut = normalizeShortcutValue(cfg.itemPrivateShortcut, DEFAULT_ITEM_PRIVATE_SHORTCUT);
         const nextItemPinShortcut = normalizeShortcutValue(cfg.itemPinShortcut, DEFAULT_ITEM_PIN_SHORTCUT);
         const nextItemDeleteShortcut = normalizeShortcutValue(cfg.itemDeleteShortcut, DEFAULT_ITEM_DELETE_SHORTCUT);
+        const nextItemOcrShortcut = normalizeShortcutValue(cfg.itemOcrShortcut, DEFAULT_ITEM_OCR_SHORTCUT);
         setLocale(normalizeLocale(cfg.locale));
         if (
           nextShortcut !== (cfg.shortcut ?? "") ||
@@ -270,18 +280,22 @@ function MainApp() {
             itemPrivateShortcut: nextItemPrivateShortcut,
             itemPinShortcut: nextItemPinShortcut,
             itemDeleteShortcut: nextItemDeleteShortcut,
+            itemOcrShortcut: nextItemOcrShortcut,
           }).catch(console.error);
         }
         setItemTagShortcut(normalizeLocalShortcut(nextItemTagShortcut));
         setItemPrivateShortcut(normalizeLocalShortcut(nextItemPrivateShortcut));
         setItemPinShortcut(normalizeLocalShortcut(nextItemPinShortcut));
         setItemDeleteShortcut(normalizeLocalShortcut(nextItemDeleteShortcut));
+        setItemOcrShortcut(normalizeLocalShortcut(nextItemOcrShortcut));
         if (typeof cfg.autoPaste === "boolean") setAutoPaste(cfg.autoPaste);
         if (typeof cfg.keepWindowOpen === "boolean") setKeepWindowOpen(cfg.keepWindowOpen);
         if (typeof cfg.alwaysOnTop === "boolean") setAlwaysOnTop(cfg.alwaysOnTop);
         if (typeof cfg.pageSize === "number") setPageSize(cfg.pageSize);
         if (typeof cfg.historyLimit === "number") setHistoryLimit(cfg.historyLimit);
         setRecommendationsEnabled(cfg.recommendationsEnabled !== false);
+        setApiTranslateEnabled(Boolean(cfg.apiTranslateEnabled));
+        setShowMemoryUsage(Boolean(cfg.showMemoryUsage));
         if (Array.isArray(cfg.managedTags)) {
           const sanitized = sanitizeManagedTags(cfg.managedTags);
           setManagedTags(sanitized);
@@ -835,6 +849,53 @@ function MainApp() {
     void handleCopy(item);
   };
 
+  const runOcrForItem = async (item: HistoryItem) => {
+    if (ocrBusyIdRef.current === item.id) return;
+    ocrBusyIdRef.current = item.id;
+    setOcrBusyId(item.id);
+    try {
+      const text = await api.ocrImageItem(item.id);
+      setOcrPanel({ item, text });
+    } catch (err) {
+      setErrorMsg(`${tr(locale, "ocrFailed")}${String(err)}`);
+      void reloadHistory();
+    } finally {
+      ocrBusyIdRef.current = null;
+      setOcrBusyId(null);
+    }
+  };
+
+  const handleOcrOpen = (item: HistoryItem) => {
+    const existing = item.metadata?.ocrText?.[0];
+    if (existing) {
+      setOcrPanel({ item, text: existing });
+      return;
+    }
+    void runOcrForItem(item);
+  };
+
+  const handleOcrCopyText = (item: HistoryItem, text: string) => {
+    setOcrPanel(null);
+    void handleCopy({ id: item.id, content: text, contentType: "text" });
+  };
+
+  const handleOcrPasteText = async (item: HistoryItem, text: string) => {
+    try {
+      setOcrPanel(null);
+      await resetClipboardStack();
+      await writeText(text);
+      setInjectedOverrideSig(text);
+      setCopiedId(item.id);
+      window.setTimeout(() => setCopiedId(null), 1600);
+      void api.markUsed(item.id).catch(console.error);
+      if (!alwaysOnTop) {
+        await applyWindowHideForPaste();
+      }
+    } catch (err) {
+      setErrorMsg("Paste error: " + String(err));
+    }
+  };
+
   const toggleQueuedItem = (id: number) => {
     setQueuedIds((prev) => {
       const index = prev.indexOf(id);
@@ -899,6 +960,7 @@ function MainApp() {
     itemPrivateShortcut: string;
     itemPinShortcut: string;
     itemDeleteShortcut: string;
+    itemOcrShortcut: string;
     autoPaste: boolean;
     keepWindowOpen: boolean;
     alwaysOnTop: boolean;
@@ -914,6 +976,7 @@ function MainApp() {
     apiTranslateModel: string;
     apiTranslateTargetLang: string;
     recommendationsEnabled: boolean;
+    showMemoryUsage: boolean;
     locale: Locale;
   }) => {
     setLocale(settings.locale);
@@ -924,9 +987,12 @@ function MainApp() {
     setItemPrivateShortcut(normalizeLocalShortcut(settings.itemPrivateShortcut));
     setItemPinShortcut(normalizeLocalShortcut(settings.itemPinShortcut));
     setItemDeleteShortcut(normalizeLocalShortcut(settings.itemDeleteShortcut));
+    setItemOcrShortcut(normalizeLocalShortcut(settings.itemOcrShortcut));
     setPageSize(settings.pageSize);
     setHistoryLimit(settings.historyLimit);
     setRecommendationsEnabled(settings.recommendationsEnabled);
+    setShowMemoryUsage(settings.showMemoryUsage);
+    setApiTranslateEnabled(settings.apiTranslateEnabled);
   };
 
   const handleQuickEdit = (item: HistoryItem) => {
@@ -1211,6 +1277,8 @@ function MainApp() {
     itemPrivateShortcut,
     itemPinShortcut,
     itemDeleteShortcut,
+    itemOcrShortcut,
+    ocrPanelOpen: ocrPanel !== null,
   });
   handlersRef.current = {
     closeQuickTagPicker,
@@ -1221,6 +1289,7 @@ function MainApp() {
     handleDelete,
     handleCopyFromUI,
     toggleQueuedItem,
+    handleOcrOpen,
   };
   keydownStateRef.current = {
     activeView,
@@ -1239,6 +1308,8 @@ function MainApp() {
     itemPrivateShortcut,
     itemPinShortcut,
     itemDeleteShortcut,
+    itemOcrShortcut,
+    ocrPanelOpen: ocrPanel !== null,
   };
 
   useEffect(() => {
@@ -1249,6 +1320,10 @@ function MainApp() {
       if (event.key === "Escape") {
         event.preventDefault();
         if (s.privacyAction) return;
+        if (s.ocrPanelOpen) {
+          setOcrPanel(null);
+          return;
+        }
         if (s.quickTagItemId !== null) {
           h.closeQuickTagPicker();
           return;
@@ -1317,6 +1392,16 @@ function MainApp() {
           event.preventDefault();
           if (s.quickTagItemId === selected.id) h.closeQuickTagPicker();
           h.handleDelete(selected.id);
+          return;
+        }
+        if (
+          selected &&
+          selected.contentType === "image" &&
+          !selected.isPrivate &&
+          shortcut === normalizeLocalShortcut(s.itemOcrShortcut)
+        ) {
+          event.preventDefault();
+          h.handleOcrOpen(selected);
           return;
         }
       }
@@ -1553,6 +1638,15 @@ function MainApp() {
           <button className="eacptrans-scroll-arrow" onClick={() => handleScrollTabs("right")}>
             <ChevronRight className="h-4 w-4" />
           </button>
+
+          {showMemoryUsage && (
+            <MemoryChip
+              locale={locale}
+              onOpenSettings={() => {
+                if (activeView !== "settings") setActiveView("settings");
+              }}
+            />
+          )}
       </section>
 
       <ErrorBanner message={errorMsg} onDismiss={() => setErrorMsg(null)} />
@@ -1629,6 +1723,10 @@ function MainApp() {
                   onEnablePrivacy={handleEnablePrivacy}
                   onDisablePrivacy={handleDisablePrivacy}
                   onQuickEdit={handleQuickEdit}
+                  onOcrOpen={handleOcrOpen}
+                  onNotify={setErrorMsg}
+                  ocrBusy={ocrBusyId === item.id}
+                  apiTranslateEnabled={apiTranslateEnabled}
                   tagMenuOpen={quickTagItemId === item.id}
                   onTagMenuClose={closeQuickTagPicker}
                 />
@@ -1659,6 +1757,21 @@ function MainApp() {
             setPrivacyAction(null);
           }}
           onConfirm={handlePrivacyConfirm}
+        />
+      )}
+
+      {ocrPanel && (
+        <OcrResultModal
+          key={ocrPanel.item.id}
+          item={ocrPanel.item}
+          locale={locale}
+          initialText={ocrPanel.text}
+          apiTranslateEnabled={apiTranslateEnabled}
+          onClose={() => setOcrPanel(null)}
+          onCopyText={(text) => handleOcrCopyText(ocrPanel.item, text)}
+          onPasteText={(text) => void handleOcrPasteText(ocrPanel.item, text)}
+          onSavedAsItem={() => void reloadHistory()}
+          onNotify={setErrorMsg}
         />
       )}
     </div>

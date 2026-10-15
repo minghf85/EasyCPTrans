@@ -64,7 +64,7 @@ fn device_tag_name(device_name: &str) -> String {
     normalize_device_name(device_name)
 }
 
-fn attach_device_identity(
+pub(crate) fn attach_device_identity(
     metadata: &mut HashMap<String, Vec<String>>,
     tags: &mut Vec<String>,
     device_name: &str,
@@ -86,7 +86,7 @@ pub(crate) fn parse_metadata(raw: Option<String>) -> HashMap<String, Vec<String>
         .unwrap_or_default()
 }
 
-fn merge_unique_tags(existing: Vec<String>, incoming: Vec<String>) -> Vec<String> {
+pub(crate) fn merge_unique_tags(existing: Vec<String>, incoming: Vec<String>) -> Vec<String> {
     let mut result = Vec::new();
     let mut seen = HashSet::new();
     for tag in existing.into_iter().chain(incoming.into_iter()) {
@@ -102,7 +102,7 @@ fn merge_unique_tags(existing: Vec<String>, incoming: Vec<String>) -> Vec<String
     result
 }
 
-async fn record_frequent_commands(
+pub(crate) async fn record_frequent_commands(
     pool: &SqlitePool,
     commands: &[String],
     source_app: Option<&str>,
@@ -326,6 +326,7 @@ pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfi
         item_private_shortcut: default_item_private_shortcut(),
         item_pin_shortcut: default_item_pin_shortcut(),
         item_delete_shortcut: default_item_delete_shortcut(),
+        item_ocr_shortcut: default_item_ocr_shortcut(),
         ecdict_path: String::new(),
         locale: default_locale(),
         auto_paste: true,
@@ -347,6 +348,10 @@ pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfi
         lan_sync_pairing_code: "".to_string(),
         lan_sync_port: 0,
         recommendations_enabled: true,
+        ocr_enabled: true,
+        ocr_auto: true,
+        ocr_language: String::new(),
+        show_memory_usage: false,
         managed_tags: Vec::new(),
         window_width: None,
         window_height: None,
@@ -1117,6 +1122,16 @@ pub async fn ingest_clipboard(
     }
 
     emit_changed(&app).await;
+
+    // Fresh screenshots are recognized in the background so the image becomes
+    // searchable by its text without the user asking for it.
+    if !deduped && processed.content_type == "image" {
+        let app_config = read_app_config(&app);
+        if app_config.ocr_enabled && app_config.ocr_auto {
+            crate::ocr::spawn_auto_ocr(app.clone(), item_id, processed.content.clone());
+        }
+    }
+
     println!(
         "[EasyCPTrans] Ingest finish: accepted=true, id={}, deduped={}",
         item_id, deduped
@@ -2408,6 +2423,8 @@ pub struct AppConfig {
     pub item_pin_shortcut: String,
     #[serde(default = "default_item_delete_shortcut")]
     pub item_delete_shortcut: String,
+    #[serde(default = "default_item_ocr_shortcut")]
+    pub item_ocr_shortcut: String,
     #[serde(default)]
     pub ecdict_path: String,
     #[serde(default = "default_locale")]
@@ -2450,6 +2467,14 @@ pub struct AppConfig {
     pub lan_sync_port: u16,
     #[serde(default = "default_bool_true")]
     pub recommendations_enabled: bool,
+    #[serde(default = "default_bool_true")]
+    pub ocr_enabled: bool,
+    #[serde(default = "default_bool_true")]
+    pub ocr_auto: bool,
+    #[serde(default)]
+    pub ocr_language: String,
+    #[serde(default = "default_bool_false")]
+    pub show_memory_usage: bool,
     #[serde(default, deserialize_with = "deserialize_managed_tags")]
     pub managed_tags: Vec<ManagedTagConfig>,
     #[serde(default)]
@@ -2491,6 +2516,9 @@ fn default_item_pin_shortcut() -> String {
 }
 fn default_item_delete_shortcut() -> String {
     "Delete".to_string()
+}
+fn default_item_ocr_shortcut() -> String {
+    "O".to_string()
 }
 fn default_locale() -> String {
     "zh-CN".to_string()
@@ -2607,6 +2635,7 @@ pub struct ConfigResponse {
     pub item_private_shortcut: String,
     pub item_pin_shortcut: String,
     pub item_delete_shortcut: String,
+    pub item_ocr_shortcut: String,
     pub ecdict_path: String,
     pub locale: String,
     pub default_dir: String,
@@ -2630,6 +2659,10 @@ pub struct ConfigResponse {
     pub lan_sync_pairing_code: String,
     pub lan_sync_port: u16,
     pub recommendations_enabled: bool,
+    pub ocr_enabled: bool,
+    pub ocr_auto: bool,
+    pub ocr_language: String,
+    pub show_memory_usage: bool,
     pub managed_tags: Vec<ManagedTagConfig>,
     pub window_width: Option<f64>,
     pub window_height: Option<f64>,
@@ -2651,6 +2684,7 @@ pub struct PartialAppConfig {
     pub item_private_shortcut: Option<String>,
     pub item_pin_shortcut: Option<String>,
     pub item_delete_shortcut: Option<String>,
+    pub item_ocr_shortcut: Option<String>,
     pub ecdict_path: Option<String>,
     pub locale: Option<String>,
     pub auto_paste: Option<bool>,
@@ -2672,6 +2706,10 @@ pub struct PartialAppConfig {
     pub lan_sync_pairing_code: Option<String>,
     pub lan_sync_port: Option<u16>,
     pub recommendations_enabled: Option<bool>,
+    pub ocr_enabled: Option<bool>,
+    pub ocr_auto: Option<bool>,
+    pub ocr_language: Option<String>,
+    pub show_memory_usage: Option<bool>,
     pub managed_tags: Option<Vec<ManagedTagConfig>>,
     pub window_width: Option<f64>,
     pub window_height: Option<f64>,
@@ -2703,6 +2741,7 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
         item_private_shortcut: conf.item_private_shortcut,
         item_pin_shortcut: conf.item_pin_shortcut,
         item_delete_shortcut: conf.item_delete_shortcut,
+        item_ocr_shortcut: conf.item_ocr_shortcut,
         ecdict_path: conf.ecdict_path,
         locale: conf.locale,
         default_dir,
@@ -2726,6 +2765,10 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
         lan_sync_pairing_code: conf.lan_sync_pairing_code,
         lan_sync_port: conf.lan_sync_port,
         recommendations_enabled: conf.recommendations_enabled,
+        ocr_enabled: conf.ocr_enabled,
+        ocr_auto: conf.ocr_auto,
+        ocr_language: conf.ocr_language,
+        show_memory_usage: conf.show_memory_usage,
         managed_tags: conf.managed_tags,
         window_width: conf.window_width,
         window_height: conf.window_height,
@@ -2772,6 +2815,9 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
     }
     if let Some(value) = config.item_delete_shortcut {
         merged.item_delete_shortcut = value;
+    }
+    if let Some(value) = config.item_ocr_shortcut {
+        merged.item_ocr_shortcut = value;
     }
     if let Some(value) = config.ecdict_path {
         merged.ecdict_path = value;
@@ -2838,6 +2884,18 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
     }
     if let Some(value) = config.recommendations_enabled {
         merged.recommendations_enabled = value;
+    }
+    if let Some(value) = config.ocr_enabled {
+        merged.ocr_enabled = value;
+    }
+    if let Some(value) = config.ocr_auto {
+        merged.ocr_auto = value;
+    }
+    if let Some(value) = config.ocr_language {
+        merged.ocr_language = value;
+    }
+    if let Some(value) = config.show_memory_usage {
+        merged.show_memory_usage = value;
     }
     if let Some(value) = config.managed_tags {
         merged.managed_tags =

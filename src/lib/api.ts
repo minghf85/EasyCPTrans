@@ -73,7 +73,24 @@ export const api = {
   translateTextApi: (text: string, targetLang?: string) =>
     invoke<void>("translate_text_api", { text, targetLang }),
 
-  ocrImageItem: (id: number) => invoke<string>("ocr_image_item", { id }),
+  ocrImageItem: (id: number, language?: string) =>
+    invoke<string>("ocr_image_item", { id, language: language ?? null }),
+
+  listOcrLanguages: () =>
+    invoke<Array<{ tag: string; name: string }>>("list_ocr_languages"),
+
+  setOcrText: (id: number, text: string) =>
+    invoke<void>("set_ocr_text", { id, text }),
+
+  createTextItemFromOcr: (id: number) =>
+    invoke<number>("create_text_item_from_ocr", { id }),
+
+  getProcessStats: () =>
+    invoke<{
+      workingSetBytes: number;
+      privateBytes: number;
+      peakWorkingSetBytes: number;
+    }>("get_process_stats"),
 
   convertEcdictCsvToSqlite: (csvPath: string, dbPath: string) =>
     invoke<number>("convert_ecdict_csv_to_sqlite", { csvPath, dbPath }),
@@ -136,6 +153,7 @@ export const api = {
       itemPrivateShortcut?: string;
       itemPinShortcut?: string;
       itemDeleteShortcut?: string;
+      itemOcrShortcut?: string;
       ecdictPath?: string;
       locale?: Locale;
       defaultDir: string;
@@ -159,6 +177,10 @@ export const api = {
       lanSyncPairingCode?: string;
       lanSyncPort?: number;
       recommendationsEnabled?: boolean;
+      ocrEnabled?: boolean;
+      ocrAuto?: boolean;
+      ocrLanguage?: string;
+      showMemoryUsage?: boolean;
       managedTags: ManagedTag[];
       windowWidth?: number;
       windowHeight?: number;
@@ -177,6 +199,7 @@ export const api = {
     itemPrivateShortcut?: string;
     itemPinShortcut?: string;
     itemDeleteShortcut?: string;
+    itemOcrShortcut?: string;
     ecdictPath?: string;
     locale?: Locale;
     autoPaste?: boolean;
@@ -198,6 +221,10 @@ export const api = {
     lanSyncPairingCode?: string;
     lanSyncPort?: number;
     recommendationsEnabled?: boolean;
+    ocrEnabled?: boolean;
+    ocrAuto?: boolean;
+    ocrLanguage?: string;
+    showMemoryUsage?: boolean;
     managedTags?: ManagedTag[];
     windowWidth?: number;
     windowHeight?: number;
