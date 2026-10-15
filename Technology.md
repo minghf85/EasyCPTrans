@@ -1,6 +1,6 @@
 # EasyCPTrans Technology
 
-面向版本：`0.1.1`
+面向版本：`0.2.0`
 
 本文面向二次开发，说明 EasyCPTrans 的项目结构、核心模块、Tauri 接口、事件流、数据模型和扩展点。
 
