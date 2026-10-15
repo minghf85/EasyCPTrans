@@ -213,6 +213,7 @@ function MainApp() {
   const [ocrBusyId, setOcrBusyId] = useState<number | null>(null);
   const ocrBusyIdRef = useRef<number | null>(null);
   const [apiTranslateEnabled, setApiTranslateEnabled] = useState(false);
+  const [ocrEnabled, setOcrEnabled] = useState(true);
   const [showMemoryUsage, setShowMemoryUsage] = useState(false);
   const [managedTags, setManagedTags] = useState<ManagedTag[]>([]);
   const [tagManageBusy, setTagManageBusy] = useState(false);
@@ -295,6 +296,7 @@ function MainApp() {
         if (typeof cfg.historyLimit === "number") setHistoryLimit(cfg.historyLimit);
         setRecommendationsEnabled(cfg.recommendationsEnabled !== false);
         setApiTranslateEnabled(Boolean(cfg.apiTranslateEnabled));
+        setOcrEnabled(cfg.ocrEnabled !== false);
         setShowMemoryUsage(Boolean(cfg.showMemoryUsage));
         if (Array.isArray(cfg.managedTags)) {
           const sanitized = sanitizeManagedTags(cfg.managedTags);
@@ -976,6 +978,7 @@ function MainApp() {
     apiTranslateModel: string;
     apiTranslateTargetLang: string;
     recommendationsEnabled: boolean;
+    ocrEnabled: boolean;
     showMemoryUsage: boolean;
     locale: Locale;
   }) => {
@@ -993,6 +996,7 @@ function MainApp() {
     setRecommendationsEnabled(settings.recommendationsEnabled);
     setShowMemoryUsage(settings.showMemoryUsage);
     setApiTranslateEnabled(settings.apiTranslateEnabled);
+    setOcrEnabled(settings.ocrEnabled);
   };
 
   const handleQuickEdit = (item: HistoryItem) => {
@@ -1278,6 +1282,7 @@ function MainApp() {
     itemPinShortcut,
     itemDeleteShortcut,
     itemOcrShortcut,
+    ocrEnabled,
     ocrPanelOpen: ocrPanel !== null,
   });
   handlersRef.current = {
@@ -1309,6 +1314,7 @@ function MainApp() {
     itemPinShortcut,
     itemDeleteShortcut,
     itemOcrShortcut,
+    ocrEnabled,
     ocrPanelOpen: ocrPanel !== null,
   };
 
@@ -1396,6 +1402,7 @@ function MainApp() {
         }
         if (
           selected &&
+          s.ocrEnabled &&
           selected.contentType === "image" &&
           !selected.isPrivate &&
           shortcut === normalizeLocalShortcut(s.itemOcrShortcut)
@@ -1726,6 +1733,7 @@ function MainApp() {
                   onOcrOpen={handleOcrOpen}
                   onNotify={setErrorMsg}
                   ocrBusy={ocrBusyId === item.id}
+                  ocrEnabled={ocrEnabled}
                   apiTranslateEnabled={apiTranslateEnabled}
                   tagMenuOpen={quickTagItemId === item.id}
                   onTagMenuClose={closeQuickTagPicker}

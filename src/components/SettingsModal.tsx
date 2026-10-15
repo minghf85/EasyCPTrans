@@ -32,6 +32,7 @@ interface Props {
     apiTranslateModel: string;
     apiTranslateTargetLang: string;
     recommendationsEnabled: boolean;
+    ocrEnabled: boolean;
     showMemoryUsage: boolean;
     locale: Locale;
   }) => void;
@@ -575,6 +576,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         apiTranslateModel,
         apiTranslateTargetLang,
         recommendationsEnabled,
+        ocrEnabled,
         showMemoryUsage,
         locale: selectedLocale,
       });

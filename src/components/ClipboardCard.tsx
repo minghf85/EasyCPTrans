@@ -171,6 +171,7 @@ interface Props {
   onOcrOpen: (item: HistoryItem) => void;
   onNotify: (message: string) => void;
   ocrBusy?: boolean;
+  ocrEnabled?: boolean;
   apiTranslateEnabled?: boolean;
   tagMenuOpen?: boolean;
   onTagMenuClose?: () => void;
@@ -197,6 +198,7 @@ export const ClipboardCard = memo(function ClipboardCard({
   onOcrOpen,
   onNotify,
   ocrBusy = false,
+  ocrEnabled = true,
   apiTranslateEnabled = false,
   tagMenuOpen = false,
   onTagMenuClose,
@@ -371,6 +373,7 @@ export const ClipboardCard = memo(function ClipboardCard({
           ) : (
             <>
               <img src={imageSrc} alt="Clipboard content" className="eacptrans-image-preview" loading="lazy" decoding="async" />
+              {(ocrEnabled || ocrText) && (
               <button
                 className={`eacptrans-image-ocr-btn ${ocrBusy ? "running" : ""} ${ocrText ? "has-text" : ""}`}
                 disabled={ocrBusy}
@@ -399,6 +402,7 @@ export const ClipboardCard = memo(function ClipboardCard({
                         : "OCR"}
                 </span>
               </button>
+              )}
             </>
           )}
         </div>
@@ -643,7 +647,7 @@ export const ClipboardCard = memo(function ClipboardCard({
                 {locale ? tr(locale, "translateWithApi") : "API 翻译"}
               </button>
             )}
-            {item.contentType === "image" && !hasPrivacy && (
+            {item.contentType === "image" && !hasPrivacy && (ocrEnabled || ocrText) && (
               <button
                 disabled={ocrBusy}
                 onClick={(event) =>
