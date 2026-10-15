@@ -429,6 +429,8 @@
   justify-content: center;
   min-width: 28px;
   height: 20px;
+  margin-left: auto;
+  margin-right: 28px;
   border: 1px solid rgba(0, 103, 192, 0.18);
   border-radius: 999px;
   background: #eef6ff;
@@ -1363,55 +1365,6 @@
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08), 0 3px 6px rgba(0, 0, 0, 0.06);
 }
 
-.eacptrans-card-head-actions {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-  /* keeps the corner clear for the absolutely positioned more button */
-  margin-right: 28px;
-}
-
-.eacptrans-card-ocr-btn {
-  display: flex;
-  flex-shrink: 0;
-  height: 26px;
-  width: 26px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  background: transparent;
-  color: #5a5a5a;
-  opacity: 0;
-  transition: opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-  cursor: pointer;
-}
-
-/* Stays out of the way until the card is hovered — the meta strip carries the
-   permanent "N chars" affordance instead. */
-.eacptrans-card:hover .eacptrans-card-ocr-btn,
-.eacptrans-card-ocr-btn.busy,
-.eacptrans-card-ocr-btn:focus-visible {
-  opacity: 1;
-}
-
-.eacptrans-card-ocr-btn.has-text,
-.eacptrans-card-ocr-btn.busy {
-  color: #0067c0;
-}
-
-.eacptrans-card-ocr-btn:hover {
-  background: #ebebeb;
-  border-color: #e0e0e0;
-  color: #1a1a1a;
-}
-
-.eacptrans-card-ocr-btn:disabled {
-  cursor: default;
-}
-
 .eacptrans-meta-ocr {
   transition: background 0.15s ease, color 0.15s ease;
 }
@@ -1428,9 +1381,11 @@
 .eacptrans-ocr-panel {
   display: flex;
   width: min(820px, 100%);
-  max-height: calc(100vh - 56px);
+  /* the overlay adds 16px of padding on each side */
+  max-height: calc(100vh - 32px);
   flex-direction: column;
   gap: 10px;
+  overflow: hidden;
   border: 1px solid #e0e0e0;
   border-radius: 12px;
   background: #fff;
@@ -1440,6 +1395,7 @@
 
 .eacptrans-ocr-head {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid #ebebeb;
@@ -1485,9 +1441,11 @@
 
 .eacptrans-ocr-body {
   display: flex;
+  flex: 1 1 auto;
+  /* no hard floor: the body absorbs whatever height the panel has left, so the
+     text scrolls inside instead of pushing the action row out of the panel */
+  min-height: 0;
   gap: 12px;
-  min-height: 220px;
-  flex: 1;
   overflow: hidden;
 }
 
@@ -1495,6 +1453,7 @@
   display: flex;
   width: 260px;
   flex-shrink: 0;
+  min-height: 0;
   align-items: center;
   justify-content: center;
   overflow: hidden;
@@ -1504,8 +1463,8 @@
 }
 
 .eacptrans-ocr-preview img {
-  max-height: 100%;
-  max-width: 100%;
+  height: 100%;
+  width: 100%;
   object-fit: contain;
 }
 
@@ -1518,14 +1477,16 @@
 
 .eacptrans-ocr-text {
   display: flex;
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
   gap: 6px;
 }
 
 .eacptrans-ocr-text textarea {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   resize: none;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
@@ -1546,12 +1507,14 @@
 
 .eacptrans-ocr-empty {
   display: flex;
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  overflow-y: auto;
   border: 1px dashed #e0e0e0;
   border-radius: 8px;
   background: #fafafa;
@@ -1581,6 +1544,7 @@
 
 .eacptrans-ocr-actions {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 8px;
   border-top: 1px solid #ebebeb;
@@ -1727,7 +1691,6 @@
   .eacptrans-modal-panel,
   .eacptrans-banner-in,
   .eacptrans-page-in,
-  .eacptrans-card-ocr-btn,
   .eacptrans-ocr-btn,
   .eacptrans-ocr-close,
   .eacptrans-memory-chip {

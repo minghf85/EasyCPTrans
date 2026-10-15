@@ -158,7 +158,6 @@ Text inside a screenshot — an error message, a code snippet, an invoice, a cha
 
 | Entry point | Action |
 | --- | --- |
-| Image card | Hover the card and click the text-recognition icon in the top-right corner |
 | Card menu | `⌄` → `OCR` |
 | Keyboard | Select an image item and press `O` |
 

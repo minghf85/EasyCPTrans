@@ -227,7 +227,6 @@ export const ClipboardCard = memo(function ClipboardCard({
   const translationState = translationStatus(item);
   const translationWord = translationQuery(item);
   const ocrText = item.metadata?.ocrText?.[0] ?? "";
-  const showOcrAction = item.contentType === "image" && !hasPrivacy && (ocrEnabled || ocrText);
   const isTranslationItem = item.tags.includes("Word") || Boolean(translationState || translationWord);
   const displayTags = item.tags.filter((tag) => !isRedundantMetaTag(item, tag));
   const tagColorFor = (tag: string) => tagColors[tag.toLowerCase()];
@@ -452,29 +451,7 @@ export const ClipboardCard = memo(function ClipboardCard({
           <span className="eacptrans-card-appname">{sourceApp(item)}</span>
         </div>
 
-        {(quickSlot || showOcrAction) && (
-          <div className="eacptrans-card-head-actions">
-            {quickSlot && <span className="eacptrans-card-quick-badge">#{quickSlot}</span>}
-
-            {showOcrAction && (
-              <button
-                className={`eacptrans-card-ocr-btn ${ocrBusy ? "busy" : ""} ${ocrText ? "has-text" : ""}`}
-                disabled={ocrBusy}
-                title={locale ? tr(locale, ocrBusy ? "ocrRunning" : ocrText ? "ocrText" : "ocrScan") : "OCR"}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onOcrOpen(item);
-                }}
-              >
-                {ocrBusy ? (
-                  <Loader2 className="eacptrans-card-ocr-icon h-4 w-4 animate-spin" />
-                ) : (
-                  <ScanText className="eacptrans-card-ocr-icon h-4 w-4" />
-                )}
-              </button>
-            )}
-          </div>
-        )}
+        {quickSlot && <span className="eacptrans-card-quick-badge">#{quickSlot}</span>}
 
         <button
           className={`eacptrans-more-btn ${menuOpen ? "active" : ""}`}
