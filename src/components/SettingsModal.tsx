@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Cloud, Folder, RefreshCw, Shield } from "lucide-react";
+import { Cloud, Folder, RefreshCw, Shield, Sparkles, Terminal, Wifi } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
 import { LOCALE_OPTIONS, normalizeLocale, tr, type Locale } from "../lib/i18n";
@@ -25,6 +25,12 @@ interface Props {
     webdavUsername: string;
     webdavSyncEnabled: boolean;
     deviceName: string;
+    apiTranslateEnabled: boolean;
+    apiTranslateBaseUrl: string;
+    apiTranslateKey: string;
+    apiTranslateModel: string;
+    apiTranslateTargetLang: string;
+    recommendationsEnabled: boolean;
     locale: Locale;
   }) => void;
 }
@@ -283,8 +289,22 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
   const [webdavPassword, setWebdavPassword] = useState("");
   const [webdavSyncEnabled, setWebdavSyncEnabled] = useState(false);
   const [deviceName, setDeviceName] = useState("This Device");
+  const [apiTranslateEnabled, setApiTranslateEnabled] = useState(false);
+  const [apiTranslateBaseUrl, setApiTranslateBaseUrl] = useState("");
+  const [apiTranslateKey, setApiTranslateKey] = useState("");
+  const [apiTranslateModel, setApiTranslateModel] = useState("gpt-4o-mini");
+  const [apiTranslateTargetLang, setApiTranslateTargetLang] = useState("");
   const [webdavBusy, setWebdavBusy] = useState(false);
   const [webdavMessage, setWebdavMessage] = useState("");
+
+  const [recommendationsEnabled, setRecommendationsEnabled] = useState(true);
+  const [lanSyncEnabled, setLanSyncEnabled] = useState(false);
+  const [lanSyncPairingCode, setLanSyncPairingCode] = useState("");
+  const [lanSyncPort, setLanSyncPort] = useState(0);
+  const [lanSyncPeers, setLanSyncPeers] = useState<Array<{ name: string; host: string; addresses: string[]; port: number }>>([]);
+  const [lanSyncListening, setLanSyncListening] = useState(false);
+  const [lanSyncBusy, setLanSyncBusy] = useState(false);
+  const [lanSyncMessage, setLanSyncMessage] = useState("");
 
   const [privacyStatus, setPrivacyStatus] = useState({
     passwordSet: false,
@@ -402,6 +422,15 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         setWebdavUsername(cfg.webdavUsername || "");
         setWebdavSyncEnabled(Boolean(cfg.webdavSyncEnabled));
         setDeviceName(cfg.deviceName || "This Device");
+        setApiTranslateEnabled(Boolean(cfg.apiTranslateEnabled));
+        setApiTranslateBaseUrl(cfg.apiTranslateBaseUrl || "");
+        setApiTranslateKey(cfg.apiTranslateKey || "");
+        setApiTranslateModel(cfg.apiTranslateModel || "gpt-4o-mini");
+        setApiTranslateTargetLang(cfg.apiTranslateTargetLang || "");
+        setRecommendationsEnabled(cfg.recommendationsEnabled !== false);
+        setLanSyncEnabled(Boolean(cfg.lanSyncEnabled));
+        setLanSyncPairingCode(cfg.lanSyncPairingCode || "");
+        setLanSyncPort(typeof cfg.lanSyncPort === "number" ? cfg.lanSyncPort : 0);
         if (typeof cfg.autoPaste === "boolean") setAutoPaste(cfg.autoPaste);
         if (typeof cfg.alwaysOnTop === "boolean") setAlwaysOnTop(cfg.alwaysOnTop);
         if (typeof cfg.pageSize === "number") setPageSize(cfg.pageSize);
@@ -422,6 +451,21 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
       .catch((err) => {
         setPrivacyMessage(tr(selectedLocale, "privacyLoadFailed") + String(err));
       });
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => {
+      api
+        .lanSyncStatus()
+        .then((status) => {
+          setLanSyncListening(status.listening);
+          setLanSyncPeers(status.peers);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 2000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const handleSave = async () => {
@@ -448,7 +492,19 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         webdavUsername,
         webdavSyncEnabled,
         deviceName,
+        apiTranslateEnabled,
+        apiTranslateBaseUrl: apiTranslateBaseUrl.trim(),
+        apiTranslateKey: apiTranslateKey.trim(),
+        apiTranslateModel: apiTranslateModel.trim() || "gpt-4o-mini",
+        apiTranslateTargetLang: apiTranslateTargetLang.trim(),
+        recommendationsEnabled,
+        lanSyncEnabled,
+        lanSyncPairingCode: lanSyncPairingCode.trim(),
+        lanSyncPort,
         ...(webdavPassword.trim() ? { webdavPassword: webdavPassword.trim() } : {}),
+      });
+      await api.setLanSyncEnabled(lanSyncEnabled, lanSyncPairingCode.trim(), lanSyncPort).catch((err) => {
+        console.error("LAN sync state update failed:", err);
       });
       const shortcutReport = await api.refreshGlobalShortcuts();
       const shouldSavePrivacy =
@@ -481,6 +537,12 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         webdavUsername,
         webdavSyncEnabled,
         deviceName,
+        apiTranslateEnabled,
+        apiTranslateBaseUrl,
+        apiTranslateKey,
+        apiTranslateModel,
+        apiTranslateTargetLang,
+        recommendationsEnabled,
         locale: selectedLocale,
       });
       setWebdavPassword("");
@@ -527,6 +589,41 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
       setWebdavMessage(tr(selectedLocale, "webdavSyncFailed") + String(err));
     } finally {
       setWebdavBusy(false);
+    }
+  };
+
+  const handleGenerateLanPairingCode = async () => {
+    try {
+      const code = await api.generateLanPairingCode();
+      setLanSyncPairingCode(code);
+    } catch (err) {
+      setLanSyncMessage(tr(selectedLocale, "lanSyncSyncFailed") + String(err));
+    }
+  };
+
+  const handleLanSyncNow = async () => {
+    setLanSyncBusy(true);
+    setLanSyncMessage("");
+    try {
+      await api.setLanSyncEnabled(lanSyncEnabled, lanSyncPairingCode.trim(), lanSyncPort);
+      if (!lanSyncEnabled) {
+        setLanSyncMessage("LAN sync disabled.");
+        return;
+      }
+      const result = await api.triggerLanSync();
+      const parts = [
+        `${tr(selectedLocale, "lanSyncSynced")}`,
+        `${result.peersFound} peers`,
+        `pushed ${result.pushed}, pulled ${result.pulled}`,
+      ];
+      if (result.errors.length > 0) {
+        parts.push(`errors: ${result.errors.join("; ")}`);
+      }
+      setLanSyncMessage(parts.join(" · "));
+    } catch (err) {
+      setLanSyncMessage(tr(selectedLocale, "lanSyncSyncFailed") + String(err));
+    } finally {
+      setLanSyncBusy(false);
     }
   };
 
@@ -580,7 +677,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
   useImperativeHandle(ref, () => ({ save: handleSave }));
 
   return (
-    <div className="eacptrans-settings-page">
+    <div className="eacptrans-settings-page eacptrans-page-in">
       <div className="eacptrans-settings-grid">
         <section className="eacptrans-settings-card">
           <div className="eacptrans-settings-head">
@@ -851,6 +948,174 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
           {webdavMessage && <span className="eacptrans-settings-msg">{webdavMessage}</span>}
         </section>
 
+        <section className="eacptrans-settings-card">
+          <div className="eacptrans-settings-head">
+            <h2>
+              <span className="text-base">🌐</span>
+              {tr(selectedLocale, "apiTranslation")}
+            </h2>
+            <p>{tr(selectedLocale, "apiTranslationDesc")}</p>
+          </div>
+
+          <label className="eacptrans-checkrow">
+            <input
+              type="checkbox"
+              checked={apiTranslateEnabled}
+              onChange={(e) => setApiTranslateEnabled(e.target.checked)}
+            />
+            <span>{tr(selectedLocale, "enableApiTranslation")}</span>
+          </label>
+
+          <label className="eacptrans-field">
+            <span>{tr(selectedLocale, "apiBaseUrl")}</span>
+            <input
+              type="text"
+              value={apiTranslateBaseUrl}
+              onChange={(e) => setApiTranslateBaseUrl(e.target.value)}
+              placeholder="https://api.openai.com/v1"
+            />
+          </label>
+
+          <label className="eacptrans-field">
+            <span>{tr(selectedLocale, "apiKey")}</span>
+            <input
+              type="password"
+              value={apiTranslateKey}
+              onChange={(e) => setApiTranslateKey(e.target.value)}
+              placeholder={tr(selectedLocale, "apiKeyPlaceholder")}
+            />
+          </label>
+
+          <label className="eacptrans-field">
+            <span>{tr(selectedLocale, "apiModel")}</span>
+            <input
+              type="text"
+              value={apiTranslateModel}
+              onChange={(e) => setApiTranslateModel(e.target.value)}
+              placeholder="gpt-4o-mini"
+            />
+          </label>
+
+          <label className="eacptrans-field">
+            <span>{tr(selectedLocale, "apiTargetLang")}</span>
+            <input
+              type="text"
+              value={apiTranslateTargetLang}
+              onChange={(e) => setApiTranslateTargetLang(e.target.value)}
+              placeholder={tr(selectedLocale, "apiTargetLangPlaceholder")}
+            />
+          </label>
+        </section>
+
+        <section className="eacptrans-settings-card">
+          <div className="eacptrans-settings-head">
+            <h2>
+              <Sparkles className="h-4 w-4" />
+              {tr(selectedLocale, "recommendations")}
+            </h2>
+            <p>{tr(selectedLocale, "recommendationsDesc")}</p>
+          </div>
+
+          <label className="eacptrans-checkrow">
+            <input
+              type="checkbox"
+              checked={recommendationsEnabled}
+              onChange={(e) => setRecommendationsEnabled(e.target.checked)}
+            />
+            <span>{tr(selectedLocale, "enableRecommendations")}</span>
+          </label>
+
+          <div className="eacptrans-settings-peer-list">
+            <strong>{tr(selectedLocale, "frequentCommands")}</strong>
+            <FrequentCommandsList locale={selectedLocale} />
+          </div>
+        </section>
+
+        <section className="eacptrans-settings-card">
+          <div className="eacptrans-settings-head">
+            <h2>
+              <Wifi className="h-4 w-4" />
+              {tr(selectedLocale, "lanSync")}
+            </h2>
+            <p>{tr(selectedLocale, "lanSyncDesc")}</p>
+          </div>
+
+          <label className="eacptrans-checkrow">
+            <input
+              type="checkbox"
+              checked={lanSyncEnabled}
+              onChange={(e) => setLanSyncEnabled(e.target.checked)}
+            />
+            <span>{tr(selectedLocale, "enableLanSync")}</span>
+          </label>
+
+          <label className="eacptrans-field">
+            <span>{tr(selectedLocale, "lanSyncPairingCode")}</span>
+            <div className="eacptrans-path-row">
+              <input
+                type="text"
+                value={lanSyncPairingCode}
+                onChange={(e) => setLanSyncPairingCode(e.target.value)}
+                placeholder="AB12CD"
+              />
+              <button
+                type="button"
+                className="eacptrans-secondary-btn"
+                onClick={() => void handleGenerateLanPairingCode()}
+              >
+                {tr(selectedLocale, "lanSyncGenerateCode")}
+              </button>
+            </div>
+            <small>{tr(selectedLocale, "lanSyncPairingCodeHelp")}</small>
+          </label>
+
+          <label className="eacptrans-field">
+            <span>{tr(selectedLocale, "lanSyncPort")}</span>
+            <input
+              type="number"
+              min="0"
+              max="65535"
+              value={lanSyncPort}
+              onChange={(e) => setLanSyncPort(parseInt(e.target.value, 10) || 0)}
+              placeholder={tr(selectedLocale, "lanSyncPortPlaceholder")}
+            />
+          </label>
+
+          <div className="eacptrans-settings-actions">
+            <button
+              type="button"
+              className="eacptrans-primary-btn"
+              onClick={() => void handleLanSyncNow()}
+              disabled={lanSyncBusy}
+            >
+              {lanSyncBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : null}
+              {lanSyncBusy ? tr(selectedLocale, "lanSyncSyncing") : tr(selectedLocale, "lanSyncSyncNow")}
+            </button>
+          </div>
+
+          {lanSyncListening && (
+            <small>
+              {tr(selectedLocale, "lanSyncListeningOn")} {lanSyncPort || "auto"}
+            </small>
+          )}
+
+          <div className="eacptrans-settings-peer-list">
+            <strong>{tr(selectedLocale, "lanSyncPeers")}</strong>
+            {lanSyncPeers.length === 0 ? (
+              <span>{tr(selectedLocale, "lanSyncNoPeers")}</span>
+            ) : (
+              <ul>
+                {lanSyncPeers.map((peer) => (
+                  <li key={`${peer.host}:${peer.port}`}>
+                    {peer.name} — {peer.addresses.join(", ")}:{peer.port}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          {lanSyncMessage && <span className="eacptrans-settings-msg">{lanSyncMessage}</span>}
+        </section>
+
         <section className="eacptrans-settings-card eacptrans-settings-card-wide">
           <div className="eacptrans-settings-head">
             <h2>
@@ -904,3 +1169,46 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
     </div>
   );
 });
+
+function FrequentCommandsList({ locale }: { locale: Locale }) {
+  const [commands, setCommands] = useState<Array<{ id: number; commandText: string; count: number }>>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBusy(true);
+    api
+      .getFrequentCommands(10)
+      .then((items) => {
+        if (cancelled) return;
+        setCommands(items.map((item) => ({ id: item.id, commandText: item.commandText, count: item.count })));
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (busy) {
+    return <span className="eacptrans-settings-msg">{tr(locale, "checking")}</span>;
+  }
+
+  if (commands.length === 0) {
+    return <span>{tr(locale, "noFrequentCommands")}</span>;
+  }
+
+  return (
+    <ul className="eacptrans-settings-peer-list">
+      {commands.map((cmd) => (
+        <li key={cmd.id} className="eacptrans-flex-row">
+          <Terminal className="h-3.5 w-3.5" />
+          <code className="eacptrans-code-inline">{cmd.commandText}</code>
+          <span className="eacptrans-meta-count">×{cmd.count}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}

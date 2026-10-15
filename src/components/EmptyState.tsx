@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Clock3, SearchX } from "lucide-react";
 import { tr, type Locale } from "../lib/i18n";
 
@@ -7,7 +8,7 @@ interface Props {
   onClear?: () => void;
 }
 
-export function EmptyState({ locale, filtered, onClear }: Props) {
+export const EmptyState = memo(function EmptyState({ locale, filtered, onClear }: Props) {
   return (
     <div className="flex h-full min-h-[220px] flex-col items-center justify-center px-8 text-center">
       <div className="mb-4 rounded-full border border-[#e6e6e6] bg-white p-4 shadow-sm">
@@ -22,8 +23,8 @@ export function EmptyState({ locale, filtered, onClear }: Props) {
       </p>
       <p className="mt-2 max-w-sm text-sm text-slate-500">
         {filtered
-          ? "Try a different keyword, tag, or clear the active filters."
-          : "Copy text, images, or files and EasyCPTrans will capture them into this floating deck."}
+          ? tr(locale, "emptyFilterHint")
+          : tr(locale, "emptyHistoryHint")}
       </p>
       {filtered && onClear && (
         <button
@@ -35,4 +36,4 @@ export function EmptyState({ locale, filtered, onClear }: Props) {
       )}
     </div>
   );
-}
+});

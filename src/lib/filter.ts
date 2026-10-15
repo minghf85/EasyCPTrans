@@ -430,9 +430,7 @@ export function applyFilters(items: HistoryItem[], filter: FilterState): History
 
     const content = item.content.toLowerCase();
     const app = item.metadata?.sourceApp?.[0]?.toLowerCase() ?? "";
-    const metadataValues = Object.values(item.metadata).flat().map((value) => value.toLowerCase());
     const tags = item.tags.map((tag) => tag.toLowerCase());
-    const genericHaystacks = [content, app, ...metadataValues, ...tags];
 
     if (parsed.pinned !== null && item.pinned !== parsed.pinned) return false;
     if (parsed.privateState !== null && item.isPrivate !== parsed.privateState) return false;
@@ -447,17 +445,28 @@ export function applyFilters(items: HistoryItem[], filter: FilterState): History
     if (queryMinSize !== null && fileSize < queryMinSize) return false;
     if (queryMaxSize !== null && fileSize > queryMaxSize) return false;
 
-    for (const term of parsed.includeTerms) {
-      if (!matchText(genericHaystacks, term)) return false;
-    }
-    for (const term of parsed.excludeTerms) {
-      if (matchText(genericHaystacks, term)) return false;
-    }
-    for (const phrase of parsed.includePhrases) {
-      if (!matchText(genericHaystacks, phrase)) return false;
-    }
-    for (const phrase of parsed.excludePhrases) {
-      if (matchText(genericHaystacks, phrase)) return false;
+    const hasTextSearch =
+      parsed.includeTerms.length > 0 ||
+      parsed.excludeTerms.length > 0 ||
+      parsed.includePhrases.length > 0 ||
+      parsed.excludePhrases.length > 0;
+
+    if (hasTextSearch) {
+      const metadataValues = Object.values(item.metadata).flat().map((value) => value.toLowerCase());
+      const genericHaystacks = [content, app, ...metadataValues, ...tags];
+
+      for (const term of parsed.includeTerms) {
+        if (!matchText(genericHaystacks, term)) return false;
+      }
+      for (const term of parsed.excludeTerms) {
+        if (matchText(genericHaystacks, term)) return false;
+      }
+      for (const phrase of parsed.includePhrases) {
+        if (!matchText(genericHaystacks, phrase)) return false;
+      }
+      for (const phrase of parsed.excludePhrases) {
+        if (matchText(genericHaystacks, phrase)) return false;
+      }
     }
     for (const tag of parsed.includeTags) {
       if (!tags.includes(tag)) return false;

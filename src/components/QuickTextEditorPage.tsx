@@ -83,7 +83,7 @@ export function QuickTextEditorPage({ itemId }: Props) {
   }, [handleSave]);
 
   return (
-    <div className="h-screen w-full bg-slate-50 text-slate-800 flex flex-col">
+    <div className="eacptrans-page-in h-screen w-full bg-slate-50 text-slate-800 flex flex-col">
       <header className="px-4 py-3 border-b border-slate-200 bg-white flex items-center justify-between">
         <div className="flex flex-col">
           <h1 className="text-sm font-semibold">快速编辑文本</h1>

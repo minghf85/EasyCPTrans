@@ -10,7 +10,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct SyncItem {
+pub(crate) struct SyncItem {
     pub content_hash: String,
     pub content_type: String,
     pub preview_text: Option<String>,
@@ -22,7 +22,7 @@ pub struct SyncItem {
     pub use_count: i64,
 }
 
-fn parse_tags(raw: Option<String>) -> Vec<String> {
+pub(crate) fn parse_tags(raw: Option<String>) -> Vec<String> {
     raw.and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
@@ -57,6 +57,15 @@ fn parse_config(app: &AppHandle) -> Result<AppConfig, String> {
                 webdav_password: "".to_string(),
                 webdav_sync_enabled: false,
                 device_name: "This Device".to_string(),
+                api_translate_enabled: false,
+                api_translate_base_url: "".to_string(),
+                api_translate_key: "".to_string(),
+                api_translate_model: "gpt-4o-mini".to_string(),
+                api_translate_target_lang: "".to_string(),
+                lan_sync_enabled: false,
+                lan_sync_pairing_code: "".to_string(),
+                lan_sync_port: 0,
+                recommendations_enabled: true,
                 managed_tags: Vec::new(),
                 window_width: None,
                 window_height: None,
@@ -173,7 +182,7 @@ async fn download_item(
         .map_err(|e| format!("Parse {} JSON failed: {}", item_url, e))
 }
 
-async fn upsert_remote_item(pool: &sqlx::SqlitePool, item: &SyncItem) -> Result<bool, String> {
+pub(crate) async fn upsert_remote_item(pool: &sqlx::SqlitePool, item: &SyncItem) -> Result<bool, String> {
     if item.content_hash.trim().is_empty() {
         return Ok(false);
     }

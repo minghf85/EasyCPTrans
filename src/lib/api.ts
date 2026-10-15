@@ -70,6 +70,11 @@ export const api = {
 
   translateSelectedText: () => invoke<void>("translate_selected_text"),
 
+  translateTextApi: (text: string, targetLang?: string) =>
+    invoke<void>("translate_text_api", { text, targetLang }),
+
+  ocrImageItem: (id: number) => invoke<string>("ocr_image_item", { id }),
+
   convertEcdictCsvToSqlite: (csvPath: string, dbPath: string) =>
     invoke<number>("convert_ecdict_csv_to_sqlite", { csvPath, dbPath }),
 
@@ -79,10 +84,45 @@ export const api = {
   readImageAsDataUrl: (path: string) =>
     invoke<string>("read_image_as_data_url", { path }),
 
+  getImageContent: (id: number) =>
+    invoke<string>("get_image_content", { id }),
+
   verifyWebdav: (url: string, username: string, password?: string) =>
     invoke<boolean>("verify_webdav", { url, username, password }),
 
   triggerSync: () => invoke<void>("trigger_sync"),
+
+  lanSyncStatus: () =>
+    invoke<{
+      enabled: boolean;
+      listening: boolean;
+      port: number;
+      pairingCodeSet: boolean;
+      peers: Array<{ name: string; host: string; addresses: string[]; port: number }>;
+    }>("lan_sync_status"),
+
+  setLanSyncEnabled: (enabled: boolean, pairingCode?: string, port?: number) =>
+    invoke<void>("set_lan_sync_enabled", { enabled, pairingCode, port }),
+
+  triggerLanSync: () =>
+    invoke<{
+      peersFound: number;
+      pushed: number;
+      pulled: number;
+      errors: string[];
+    }>("trigger_lan_sync"),
+
+  generateLanPairingCode: () => invoke<string>("generate_lan_pairing_code_command"),
+
+  getFrequentCommands: (limit = 20) =>
+    invoke<Array<{ id: number; commandText: string; count: number; lastUsedAt: string | null; sourceApps: string[] }>>("get_frequent_commands", { limit }),
+
+  getRecommendations: (options?: { activeWindow?: string; currentText?: string; limit?: number }) =>
+    invoke<HistoryItem[]>("get_recommendations", {
+      activeWindow: options?.activeWindow ?? "",
+      currentText: options?.currentText ?? "",
+      limit: options?.limit ?? 5,
+    }),
 
   getConfig: () =>
     invoke<{
@@ -110,6 +150,15 @@ export const api = {
       webdavPassword: string;
       webdavSyncEnabled: boolean;
       deviceName: string;
+      apiTranslateEnabled?: boolean;
+      apiTranslateBaseUrl?: string;
+      apiTranslateKey?: string;
+      apiTranslateModel?: string;
+      apiTranslateTargetLang?: string;
+      lanSyncEnabled?: boolean;
+      lanSyncPairingCode?: string;
+      lanSyncPort?: number;
+      recommendationsEnabled?: boolean;
       managedTags: ManagedTag[];
       windowWidth?: number;
       windowHeight?: number;
@@ -140,6 +189,15 @@ export const api = {
     webdavPassword?: string;
     webdavSyncEnabled?: boolean;
     deviceName?: string;
+    apiTranslateEnabled?: boolean;
+    apiTranslateBaseUrl?: string;
+    apiTranslateKey?: string;
+    apiTranslateModel?: string;
+    apiTranslateTargetLang?: string;
+    lanSyncEnabled?: boolean;
+    lanSyncPairingCode?: string;
+    lanSyncPort?: number;
+    recommendationsEnabled?: boolean;
     managedTags?: ManagedTag[];
     windowWidth?: number;
     windowHeight?: number;

@@ -1,4 +1,5 @@
 use crate::db::{compute_hash, AppState};
+use sqlx::SqlitePool;
 use crate::pipeline::{ClipboardItem, Pipeline, PipelineOutcome};
 use crate::privacy::{
     decrypt_content, encrypt_content, has_password, has_security_question, load_privacy_config,
@@ -80,7 +81,7 @@ fn parse_tags(raw: Option<String>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn parse_metadata(raw: Option<String>) -> HashMap<String, Vec<String>> {
+pub(crate) fn parse_metadata(raw: Option<String>) -> HashMap<String, Vec<String>> {
     raw.and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
@@ -99,6 +100,66 @@ fn merge_unique_tags(existing: Vec<String>, incoming: Vec<String>) -> Vec<String
         }
     }
     result
+}
+
+async fn record_frequent_commands(
+    pool: &SqlitePool,
+    commands: &[String],
+    source_app: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let source_apps_json = source_app.map(|app| {
+        serde_json::to_string(&vec![app.to_string()]).unwrap_or_else(|_| "[]".into())
+    });
+
+    for command in commands {
+        let normalized = command.trim();
+        if normalized.is_empty() || normalized.len() > 800 {
+            continue;
+        }
+        let hash = crate::db::compute_hash("command", normalized);
+
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT source_apps FROM frequent_commands WHERE command_hash = ?1",
+        )
+        .bind(&hash)
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(existing_json) = existing {
+            let mut apps: Vec<String> =
+                serde_json::from_str(&existing_json).unwrap_or_default();
+            if let Some(app) = source_app {
+                let app_clean = app.to_string();
+                if !apps.iter().any(|a| a.eq_ignore_ascii_case(&app_clean)) {
+                    apps.push(app_clean);
+                }
+            }
+            let apps_json = serde_json::to_string(&apps).unwrap_or_else(|_| "[]".into());
+            sqlx::query(
+                "UPDATE frequent_commands
+                 SET count = count + 1,
+                     last_used_at = CURRENT_TIMESTAMP,
+                     source_apps = ?1
+                 WHERE command_hash = ?2",
+            )
+            .bind(&apps_json)
+            .bind(&hash)
+            .execute(pool)
+            .await?;
+        } else {
+            sqlx::query(
+                "INSERT INTO frequent_commands
+                    (command_text, command_hash, count, source_apps)
+                 VALUES (?1, ?2, 1, ?3)",
+            )
+            .bind(normalized)
+            .bind(&hash)
+            .bind(source_apps_json.as_deref())
+            .execute(pool)
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 fn data_url_byte_len(value: &str) -> Option<usize> {
@@ -277,6 +338,15 @@ pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfi
         webdav_password: "".to_string(),
         webdav_sync_enabled: false,
         device_name: default_device_name(),
+        api_translate_enabled: false,
+        api_translate_base_url: "".to_string(),
+        api_translate_key: "".to_string(),
+        api_translate_model: default_api_translate_model(),
+        api_translate_target_lang: "".to_string(),
+        lan_sync_enabled: false,
+        lan_sync_pairing_code: "".to_string(),
+        lan_sync_port: 0,
+        recommendations_enabled: true,
         managed_tags: Vec::new(),
         window_width: None,
         window_height: None,
@@ -285,7 +355,7 @@ pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfi
     })
 }
 
-async fn emit_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
+pub(crate) async fn emit_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("clipboard-changed", ());
 }
 
@@ -1040,6 +1110,12 @@ pub async fn ingest_clipboard(
         (new_id, false)
     };
 
+    if let Some(commands) = processed.metadata.get("commands") {
+        record_frequent_commands(pool, commands, processed.source_app.as_deref())
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
     emit_changed(&app).await;
     println!(
         "[EasyCPTrans] Ingest finish: accepted=true, id={}, deduped={}",
@@ -1122,6 +1198,11 @@ pub async fn load_history(
                 }
             } else if content_type == "text" {
                 preview.unwrap_or_default()
+            } else if content_type == "image" {
+                // Image payloads (base64 data URLs) stay in the DB. The frontend
+                // fetches them on demand via get_image_content so that loading
+                // thousands of history rows does not pull megabytes into memory.
+                "".to_string()
             } else {
                 storage.unwrap_or_default()
             };
@@ -1156,6 +1237,69 @@ pub async fn load_history(
 pub struct TextItemDetail {
     pub id: i64,
     pub content: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FrequentCommand {
+    pub id: i64,
+    pub command_text: String,
+    pub count: i64,
+    pub last_used_at: Option<String>,
+    pub source_apps: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn get_frequent_commands(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<FrequentCommand>, String> {
+    let limit = limit.unwrap_or(20).clamp(1, 200);
+    let rows = sqlx::query(
+        "SELECT id, command_text, count, last_used_at, source_apps
+         FROM frequent_commands
+         ORDER BY count DESC, last_used_at DESC
+         LIMIT ?1",
+    )
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let items = rows
+        .into_iter()
+        .map(|row| FrequentCommand {
+            id: row.get("id"),
+            command_text: row.try_get("command_text").unwrap_or_default(),
+            count: row.try_get("count").unwrap_or(0),
+            last_used_at: row.try_get("last_used_at").ok(),
+            source_apps: row
+                .try_get::<Option<String>, _>("source_apps")
+                .ok()
+                .flatten()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
+        })
+        .collect();
+    Ok(items)
+}
+
+#[tauri::command]
+pub async fn get_image_content(state: State<'_, AppState>, id: i64) -> Result<String, String> {
+    let row = sqlx::query(
+        "SELECT storage_path, is_private FROM clipboard_items WHERE id = ?1 AND content_type = 'image' LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "Image item not found.".to_string())?;
+
+    let is_private = row.try_get::<i64, _>("is_private").unwrap_or(0) != 0;
+    if is_private {
+        return Err("This item is private. Unlock it before viewing.".to_string());
+    }
+    Ok(row.try_get::<String, _>("storage_path").unwrap_or_default())
 }
 
 #[tauri::command]
@@ -1898,6 +2042,202 @@ pub async fn translate_selected_text(app: AppHandle) -> Result<(), String> {
     translate_selected_text_impl(app).await
 }
 
+pub async fn create_api_translation_item(
+    app: &AppHandle<impl tauri::Runtime>,
+    state: &AppState,
+    query: &str,
+) -> Result<i64, String> {
+    let pending_content = format!("正在翻译 {} 个字符", query.chars().count());
+    let mut metadata_map = HashMap::from([
+        ("translationStatus".to_string(), vec!["pending".to_string()]),
+        ("wordQuery".to_string(), vec![query.to_string()]),
+        ("dictionary".to_string(), vec!["API".to_string()]),
+        ("length".to_string(), vec![pending_content.len().to_string()]),
+    ]);
+    let mut tags = vec!["Text".to_string(), "Word".to_string()];
+    let app_config = read_app_config(app);
+    attach_device_identity(&mut metadata_map, &mut tags, &app_config.device_name);
+    let metadata = serde_json::to_string(&metadata_map).unwrap_or_else(|_| "{}".into());
+    let tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[\"Word\"]".into());
+    let hash = compute_hash(
+        "text",
+        &format!(
+            "api_translate:{}:{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            query
+        ),
+    );
+    let id = sqlx::query(
+        "INSERT INTO clipboard_items
+            (content_type, content_hash, preview_text, storage_path, tags, metadata, use_count, last_used_at)
+         VALUES ('text', ?1, ?2, NULL, ?3, ?4, 1, CURRENT_TIMESTAMP)",
+    )
+    .bind(&hash)
+    .bind(&pending_content)
+    .bind(&tags)
+    .bind(&metadata)
+    .execute(&state.pool)
+    .await
+    .map_err(|err| err.to_string())?
+    .last_insert_rowid();
+
+    emit_changed(app).await;
+    Ok(id)
+}
+
+pub async fn update_api_translation_item(
+    app: &AppHandle<impl tauri::Runtime>,
+    state: &AppState,
+    id: i64,
+    query: &str,
+    content: &str,
+    status: &str,
+) -> Result<(), String> {
+    let metadata = serde_json::to_string(&HashMap::from([
+        ("translationStatus".to_string(), vec![status.to_string()]),
+        ("wordQuery".to_string(), vec![query.to_string()]),
+        ("dictionary".to_string(), vec!["API".to_string()]),
+        ("length".to_string(), vec![content.len().to_string()]),
+    ]))
+    .unwrap_or_else(|_| "{}".into());
+    let hash = compute_hash("text", content);
+    sqlx::query(
+        "UPDATE clipboard_items
+         SET content_hash = ?1,
+             preview_text = ?2,
+             metadata = ?3,
+             last_used_at = CURRENT_TIMESTAMP
+         WHERE id = ?4 AND (is_private IS NULL OR is_private = 0)",
+    )
+    .bind(hash)
+    .bind(content)
+    .bind(metadata)
+    .bind(id)
+    .execute(&state.pool)
+    .await
+    .map_err(|err| err.to_string())?;
+    emit_changed(app).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn translate_text_api(
+    app: AppHandle,
+    text: String,
+    target_lang: Option<String>,
+) -> Result<(), String> {
+    let config = read_app_config(&app);
+    if !config.api_translate_enabled {
+        return Err("API translation is disabled. Enable it in settings.".to_string());
+    }
+    if config.api_translate_base_url.is_empty() || config.api_translate_key.is_empty() {
+        return Err("API translation endpoint or key is not configured.".to_string());
+    }
+    if text.trim().is_empty() {
+        return Err("Nothing to translate.".to_string());
+    }
+
+    let target = target_lang
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            let t = config.api_translate_target_lang.clone();
+            if t.trim().is_empty() { None } else { Some(t) }
+        })
+        .unwrap_or_else(|| config.locale.clone());
+
+    let state = app.state::<AppState>();
+    let item_id = create_api_translation_item(&app, &state, &text).await?;
+
+    let _ = app.emit(
+        "eacptrans://translation-state",
+        TranslationStateEvent {
+            active: true,
+            query: text.clone(),
+            item_id,
+        },
+    );
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/chat/completions", config.api_translate_base_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "model": config.api_translate_model,
+        "messages": [
+            {
+                "role": "system",
+                "content": format!(
+                    "Translate the user text into '{}'. Output only the translated text, without explanations, quotes, or prefixes.",
+                    target
+                )
+            },
+            { "role": "user", "content": &text }
+        ],
+        "temperature": 0.2,
+        "max_tokens": 4096
+    });
+
+    let result = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", config.api_translate_key))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(45))
+        .send()
+        .await
+        .map_err(|e| format!("Translation request failed: {}", e))?;
+
+    if !result.status().is_success() {
+        let status = result.status();
+        let body = result.text().await.unwrap_or_default();
+        update_api_translation_item(&app, &state, item_id, &text, &format!("HTTP {}: {}", status, body), "error").await?;
+        let _ = app.emit(
+            "eacptrans://translation-state",
+            TranslationStateEvent {
+                active: false,
+                query: text,
+                item_id,
+            },
+        );
+        return Err(format!("Translation API returned HTTP {}: {}", status, body));
+    }
+
+    let json: serde_json::Value = result
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse translation response: {}", e))?;
+    let translated = json
+        .get("choices")
+        .and_then(|v| v.get(0))
+        .and_then(|v| v.get("message"))
+        .and_then(|v| v.get("content"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    if translated.is_empty() {
+        update_api_translation_item(&app, &state, item_id, &text, "Translation returned empty result.", "error").await?;
+        let _ = app.emit(
+            "eacptrans://translation-state",
+            TranslationStateEvent {
+                active: false,
+                query: text,
+                item_id,
+            },
+        );
+        return Err("Translation returned empty result.".to_string());
+    }
+
+    update_api_translation_item(&app, &state, item_id, &text, translated, "done").await?;
+    let _ = app.emit(
+        "eacptrans://translation-state",
+        TranslationStateEvent {
+            active: false,
+            query: text,
+            item_id,
+        },
+    );
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
@@ -2092,6 +2432,24 @@ pub struct AppConfig {
     pub webdav_sync_enabled: bool,
     #[serde(default = "default_device_name")]
     pub device_name: String,
+    #[serde(default = "default_bool_false")]
+    pub api_translate_enabled: bool,
+    #[serde(default)]
+    pub api_translate_base_url: String,
+    #[serde(default)]
+    pub api_translate_key: String,
+    #[serde(default = "default_api_translate_model")]
+    pub api_translate_model: String,
+    #[serde(default)]
+    pub api_translate_target_lang: String,
+    #[serde(default = "default_bool_false")]
+    pub lan_sync_enabled: bool,
+    #[serde(default)]
+    pub lan_sync_pairing_code: String,
+    #[serde(default = "default_lan_sync_port")]
+    pub lan_sync_port: u16,
+    #[serde(default = "default_bool_true")]
+    pub recommendations_enabled: bool,
     #[serde(default, deserialize_with = "deserialize_managed_tags")]
     pub managed_tags: Vec<ManagedTagConfig>,
     #[serde(default)]
@@ -2143,6 +2501,9 @@ fn default_keep_window_open() -> bool {
 fn default_bool_false() -> bool {
     false
 }
+fn default_bool_true() -> bool {
+    true
+}
 fn default_page_size() -> u32 {
     50
 }
@@ -2151,6 +2512,12 @@ fn default_history_limit() -> u32 {
 }
 fn default_device_name() -> String {
     "This Device".to_string()
+}
+fn default_api_translate_model() -> String {
+    "gpt-4o-mini".to_string()
+}
+fn default_lan_sync_port() -> u16 {
+    0
 }
 
 async fn sync_device_identity_rename<R: tauri::Runtime>(
@@ -2254,6 +2621,15 @@ pub struct ConfigResponse {
     pub webdav_password: String,
     pub webdav_sync_enabled: bool,
     pub device_name: String,
+    pub api_translate_enabled: bool,
+    pub api_translate_base_url: String,
+    pub api_translate_key: String,
+    pub api_translate_model: String,
+    pub api_translate_target_lang: String,
+    pub lan_sync_enabled: bool,
+    pub lan_sync_pairing_code: String,
+    pub lan_sync_port: u16,
+    pub recommendations_enabled: bool,
     pub managed_tags: Vec<ManagedTagConfig>,
     pub window_width: Option<f64>,
     pub window_height: Option<f64>,
@@ -2287,6 +2663,15 @@ pub struct PartialAppConfig {
     pub webdav_password: Option<String>,
     pub webdav_sync_enabled: Option<bool>,
     pub device_name: Option<String>,
+    pub api_translate_enabled: Option<bool>,
+    pub api_translate_base_url: Option<String>,
+    pub api_translate_key: Option<String>,
+    pub api_translate_model: Option<String>,
+    pub api_translate_target_lang: Option<String>,
+    pub lan_sync_enabled: Option<bool>,
+    pub lan_sync_pairing_code: Option<String>,
+    pub lan_sync_port: Option<u16>,
+    pub recommendations_enabled: Option<bool>,
     pub managed_tags: Option<Vec<ManagedTagConfig>>,
     pub window_width: Option<f64>,
     pub window_height: Option<f64>,
@@ -2332,6 +2717,15 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
         webdav_password: conf.webdav_password,
         webdav_sync_enabled: conf.webdav_sync_enabled,
         device_name: conf.device_name,
+        api_translate_enabled: conf.api_translate_enabled,
+        api_translate_base_url: conf.api_translate_base_url,
+        api_translate_key: conf.api_translate_key,
+        api_translate_model: conf.api_translate_model,
+        api_translate_target_lang: conf.api_translate_target_lang,
+        lan_sync_enabled: conf.lan_sync_enabled,
+        lan_sync_pairing_code: conf.lan_sync_pairing_code,
+        lan_sync_port: conf.lan_sync_port,
+        recommendations_enabled: conf.recommendations_enabled,
         managed_tags: conf.managed_tags,
         window_width: conf.window_width,
         window_height: conf.window_height,
@@ -2417,6 +2811,33 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
     }
     if let Some(value) = config.device_name {
         merged.device_name = normalize_device_name(&value);
+    }
+    if let Some(value) = config.api_translate_enabled {
+        merged.api_translate_enabled = value;
+    }
+    if let Some(value) = config.api_translate_base_url {
+        merged.api_translate_base_url = value.trim_end_matches('/').to_string();
+    }
+    if let Some(value) = config.api_translate_key {
+        merged.api_translate_key = value;
+    }
+    if let Some(value) = config.api_translate_model {
+        merged.api_translate_model = if value.trim().is_empty() { default_api_translate_model() } else { value };
+    }
+    if let Some(value) = config.api_translate_target_lang {
+        merged.api_translate_target_lang = value;
+    }
+    if let Some(value) = config.lan_sync_enabled {
+        merged.lan_sync_enabled = value;
+    }
+    if let Some(value) = config.lan_sync_pairing_code {
+        merged.lan_sync_pairing_code = value;
+    }
+    if let Some(value) = config.lan_sync_port {
+        merged.lan_sync_port = value;
+    }
+    if let Some(value) = config.recommendations_enabled {
+        merged.recommendations_enabled = value;
     }
     if let Some(value) = config.managed_tags {
         merged.managed_tags =

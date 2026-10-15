@@ -87,7 +87,7 @@ export function TagManagementPage({
   const isDeviceTag = (tag: ManagedTag) => tag.id?.startsWith("sys-device-") ?? false;
 
   return (
-    <div className="eacptrans-settings-page">
+    <div className="eacptrans-settings-page eacptrans-page-in">
       <div className="eacptrans-settings-grid">
         <section className="eacptrans-settings-card eacptrans-settings-card-wide">
           <div className="eacptrans-settings-head">

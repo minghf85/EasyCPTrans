@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type WheelEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type WheelEvent } from "react";
 import {
   Check,
   CheckSquare,
@@ -8,17 +8,22 @@ import {
   EyeOff,
   Folder,
   Image as ImageIcon,
+  Languages,
   Monitor,
   MousePointerClick,
   PenSquare,
   Pin,
   Plus,
+  ScanText,
   Shield,
   Square,
   Tag,
   Trash2,
 } from "lucide-react";
 import { formatExactTime, formatTime } from "../lib/time";
+import { api } from "../lib/api";
+import { fetchImageDataUrl } from "../lib/imageCache";
+import { tr, type Locale } from "../lib/i18n";
 import type { HistoryItem } from "../types";
 function formatBytes(bytes: number, decimals = 1) {
   if (!+bytes) return "0 B";
@@ -151,6 +156,7 @@ interface Props {
   isCopied: boolean;
   quickSlot?: number | null;
   queueSlot?: number | null;
+  locale?: Locale;
   onCopy: (item: HistoryItem | { id: number; content: string; contentType: "text" }) => void;
   onPaste: (item: HistoryItem) => void;
   onTogglePin: (id: number) => void;
@@ -164,7 +170,7 @@ interface Props {
   onTagMenuClose?: () => void;
 }
 
-export function ClipboardCard({
+export const ClipboardCard = memo(function ClipboardCard({
   item,
   availableTags,
   tagColors = {},
@@ -172,6 +178,7 @@ export function ClipboardCard({
   isCopied,
   quickSlot = null,
   queueSlot = null,
+  locale,
   onCopy,
   onPaste,
   onTogglePin,
@@ -190,6 +197,11 @@ export function ClipboardCard({
   const [newTagValue, setNewTagValue] = useState("");
   const [newTagError, setNewTagError] = useState("");
   const [newTagBusy, setNewTagBusy] = useState(false);
+  const [imageSrc, setImageSrc] = useState(
+    item.contentType === "image" ? item.content || null : null,
+  );
+  const imageContainerRef = useRef<HTMLDivElement | null>(null);
+  const imageRequestedRef = useRef(false);
   const newTagInputRef = useRef<HTMLInputElement | null>(null);
   const typeLabel = useMemo(() => detectLabel(item), [item]);
   const codeLike = useMemo(() => isCodeLike(item), [item]);
@@ -224,6 +236,30 @@ export function ClipboardCard({
           : typeLabel;
 
   useEffect(() => {
+    if (item.contentType !== "image" || hasPrivacy || imageSrc || imageRequestedRef.current) return;
+    const node = imageContainerRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting) && !imageRequestedRef.current) {
+          imageRequestedRef.current = true;
+          observer.disconnect();
+          void fetchImageDataUrl(item.id, api.getImageContent)
+            .then((dataUrl) => setImageSrc(dataUrl))
+            .catch(() => setImageSrc(""));
+        }
+      },
+      { root: null, threshold: 0.05 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [item.contentType, item.id, hasPrivacy, imageSrc]);
+
+  useEffect(() => {
+    if (creatingTag) newTagInputRef.current?.focus();
+  }, [creatingTag]);
+
+  useEffect(() => {
     if (tagMenuOpen) {
       setMenuOpen(true);
       setTagPickerOpen(true);
@@ -232,10 +268,6 @@ export function ClipboardCard({
       setMenuOpen(false);
     }
   }, [tagMenuOpen]);
-
-  useEffect(() => {
-    if (creatingTag) newTagInputRef.current?.focus();
-  }, [creatingTag]);
 
   const closeMenus = () => {
     setMenuOpen(false);
@@ -310,17 +342,31 @@ export function ClipboardCard({
     if (item.contentType === "image") {
       return (
         <div
+          ref={imageContainerRef}
           className="eacptrans-card-body eacptrans-card-body-image"
           onClick={() => onPaste(item)}
           onWheel={(event) => stopOuterScroll(event, "y")}
         >
-          {hasPrivacy || !item.content ? (
+          {hasPrivacy || imageSrc === null ? (
             <div className="eacptrans-image-placeholder">
               <ImageIcon className="h-8 w-8" />
-              <span>Private image</span>
+              <span>{hasPrivacy ? "Private image" : "Image"}</span>
+            </div>
+          ) : imageSrc === "" ? (
+            <div className="eacptrans-image-placeholder">
+              <ImageIcon className="h-8 w-8" />
+              <span>Image failed to load</span>
             </div>
           ) : (
-            <img src={item.content} alt="Clipboard content" className="eacptrans-image-preview" />
+            <>
+              <img src={imageSrc} alt="Clipboard content" className="eacptrans-image-preview" loading="lazy" decoding="async" />
+              {item.metadata?.ocrText?.[0] && (
+                <div className="eacptrans-image-ocr-overlay" title={item.metadata.ocrText[0]}>
+                  <ScanText className="h-3 w-3" />
+                  <span>{item.metadata.ocrText[0]}</span>
+                </div>
+              )}
+            </>
           )}
         </div>
       );
@@ -549,6 +595,32 @@ export function ClipboardCard({
                 Edit
               </button>
             )}
+            {item.contentType === "text" && !hasPrivacy && (
+              <button
+                onClick={(event) =>
+                  handleMenuAction(event, () => {
+                    closeMenus();
+                    void api.translateTextApi(item.content);
+                  })
+                }
+              >
+                <Languages className="h-3.5 w-3.5" />
+                {locale ? tr(locale, "translateWithApi") : "API 翻译"}
+              </button>
+            )}
+            {item.contentType === "image" && !hasPrivacy && (
+              <button
+                onClick={(event) =>
+                  handleMenuAction(event, () => {
+                    closeMenus();
+                    void api.ocrImageItem(item.id);
+                  })
+                }
+              >
+                <ScanText className="h-3.5 w-3.5" />
+                {locale ? tr(locale, "ocr") : "OCR"}
+              </button>
+            )}
             <button
               className="danger"
               onClick={(event) => handleMenuAction(event, () => {
@@ -600,4 +672,4 @@ export function ClipboardCard({
       </div>
     </article>
   );
-}
+});

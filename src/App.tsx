@@ -31,10 +31,12 @@ import { PasswordPromptModal } from "./components/PasswordPromptModal";
 import { QuickTextEditorPage } from "./components/QuickTextEditorPage";
 import { SettingsModal } from "./components/SettingsModal";
 import type { SettingsModalHandle } from "./components/SettingsModal";
+import { RecommendationBar } from "./components/RecommendationBar";
 import { TagManagementPage } from "./components/TagManagementPage";
 import { resetClipboardStack, useClipboardWatcher, setInjectedOverrideSig } from "./hooks/useClipboardWatcher";
 import { useHistory } from "./hooks/useHistory";
 import { api } from "./lib/api";
+import { fetchImageDataUrl } from "./lib/imageCache";
 import { normalizeLocale, tr, type Locale } from "./lib/i18n";
 import {
   aggregateTags,
@@ -65,6 +67,7 @@ const SYSTEM_TAGS: Array<ManagedTag & { key: ActiveView }> = [
 const FUNCTIONAL_TAGS: ManagedTag[] = [
   { id: "sys-word", name: "Word", common: true, color: "#0067c0", system: true },
   { id: "sys-private", name: "Private", common: true, color: "#a4262c", system: true },
+  { id: "sys-command", name: "Command", common: false, color: "#107c10", system: true },
 ];
 const LEGACY_SYSTEM_TAG_IDS = new Set(["sys-url", "sys-code"]);
 const LEGACY_SYSTEM_TAG_NAMES = new Set(["important", "links", "code"]);
@@ -76,7 +79,7 @@ function deviceTagId(name: string) {
 }
 
 function isReservedFunctionalTagName(name: string) {
-  return ["text", "image", "file", "word", "private", "privacy", "pinned"].includes(name.trim().toLowerCase());
+  return ["text", "image", "file", "word", "private", "privacy", "pinned", "command"].includes(name.trim().toLowerCase());
 }
 
 function isDeviceSystemTag(tag: ManagedTag) {
@@ -117,6 +120,8 @@ function sanitizeManagedTags(tags: ManagedTag[]) {
       next = { ...next, id: "sys-word", name: "Word", system: true };
     } else if (lowerId === "sys-private" || lowerName === "private" || lowerName === "privacy") {
       next = { ...next, id: "sys-private", name: "Private", system: true };
+    } else if (lowerId === "sys-command" || lowerName === "command" || lowerName === "commands") {
+      next = { ...next, id: "sys-command", name: "Command", system: true };
     } else if (lowerId.startsWith("sys-device-")) {
       next = { ...next, system: true };
     } else if (next.system) {
@@ -177,6 +182,7 @@ function MainApp() {
   const edgeInteractingRef = useRef(false);
   const pendingSelectionRef = useRef<{ page: number; row: number; edge: "start" | "end" } | null>(null);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [scope, setScope] = useState<Scope>("all");
   const [activeView, setActiveView] = useState<ActiveView>("all");
@@ -198,6 +204,7 @@ function MainApp() {
   const [locale, setLocale] = useState<Locale>("zh-CN");
   const [pageSize, setPageSize] = useState(50);
   const [historyLimit, setHistoryLimit] = useState(5000);
+  const [recommendationsEnabled, setRecommendationsEnabled] = useState(true);
   const [managedTags, setManagedTags] = useState<ManagedTag[]>([]);
   const [tagManageBusy, setTagManageBusy] = useState(false);
   const [tagSelectorOpen, setTagSelectorOpen] = useState(false);
@@ -274,6 +281,7 @@ function MainApp() {
         if (typeof cfg.alwaysOnTop === "boolean") setAlwaysOnTop(cfg.alwaysOnTop);
         if (typeof cfg.pageSize === "number") setPageSize(cfg.pageSize);
         if (typeof cfg.historyLimit === "number") setHistoryLimit(cfg.historyLimit);
+        setRecommendationsEnabled(cfg.recommendationsEnabled !== false);
         if (Array.isArray(cfg.managedTags)) {
           const sanitized = sanitizeManagedTags(cfg.managedTags);
           setManagedTags(sanitized);
@@ -286,6 +294,17 @@ function MainApp() {
   }, []);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 200);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    if (!errorMsg) return;
+    const timer = window.setTimeout(() => setErrorMsg(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [errorMsg]);
+
+  useEffect(() => {
     getCurrentWindow().setAlwaysOnTop(alwaysOnTop).catch((err) => {
       setErrorMsg("Set always-on-top failed: " + String(err));
     });
@@ -293,15 +312,15 @@ function MainApp() {
 
   useEffect(() => {
     setPage(0);
-  }, [search, scope, activeTags, advancedFilters, activeView]);
+  }, [debouncedSearch, scope, activeTags, advancedFilters, activeView]);
 
   const { history, reload: reloadHistory } = useHistory(historyLimit, setErrorMsg);
   useClipboardWatcher(0, setErrorMsg);
   const sourceHistory = history;
-  const filterState = { search, scope, activeTags, ...advancedFilters };
+  const filterState = { search: debouncedSearch, scope, activeTags, ...advancedFilters };
   const filtered = useMemo(
     () => applyFilters(sourceHistory, filterState as FilterState),
-    [sourceHistory, search, scope, activeTags, advancedFilters],
+    [sourceHistory, debouncedSearch, scope, activeTags, advancedFilters],
   );
 
   const tagCounts = useMemo(() => aggregateTags(sourceHistory), [sourceHistory]);
@@ -458,6 +477,10 @@ function MainApp() {
     () => allKnownTags.filter((tag) => !tag.system),
     [allKnownTags],
   );
+  const assignableTagNames = useMemo(
+    () => assignableTags.map((tag) => tag.name),
+    [assignableTags],
+  );
   const tagColorMap = useMemo(
     () =>
       Object.fromEntries(
@@ -592,6 +615,7 @@ function MainApp() {
     suppressBlurHideUntilRef.current = Date.now() + durationMs;
   };
 
+  const navigateGridSelectionRef = useRef<(direction: "left" | "right" | "up" | "down") => void>(() => {});
   const navigateGridSelection = (direction: "left" | "right" | "up" | "down") => {
     if (currentPageItems.length === 0) return;
 
@@ -658,6 +682,7 @@ function MainApp() {
       behavior: "auto",
     });
   };
+  navigateGridSelectionRef.current = navigateGridSelection;
 
   const toggleTag = (tag: string) => {
     setActiveTags((prev) => {
@@ -669,6 +694,7 @@ function MainApp() {
   const clearFilters = () => {
     const f = emptyFilter();
     setSearch(f.search);
+    setDebouncedSearch(f.search);
     setScope(f.scope);
     setActiveTags(f.activeTags);
     setAdvancedFilters({
@@ -716,10 +742,12 @@ function MainApp() {
     }
 
     if (item.contentType === "image") {
-      await writeImageDataUrl(item.content);
+      const dataUrl =
+        item.content || (await fetchImageDataUrl(item.id, api.getImageContent));
+      await writeImageDataUrl(dataUrl);
       const width = "metadata" in item ? item.metadata.width?.[0] : null;
       const height = "metadata" in item ? item.metadata.height?.[0] : null;
-      setInjectedOverrideSig(width && height ? `img_${width}x${height}` : item.content);
+      setInjectedOverrideSig(width && height ? `img_${width}x${height}` : dataUrl);
       return;
     }
 
@@ -880,6 +908,12 @@ function MainApp() {
     webdavUsername: string;
     webdavSyncEnabled: boolean;
     deviceName: string;
+    apiTranslateEnabled: boolean;
+    apiTranslateBaseUrl: string;
+    apiTranslateKey: string;
+    apiTranslateModel: string;
+    apiTranslateTargetLang: string;
+    recommendationsEnabled: boolean;
     locale: Locale;
   }) => {
     setLocale(settings.locale);
@@ -892,6 +926,7 @@ function MainApp() {
     setItemDeleteShortcut(normalizeLocalShortcut(settings.itemDeleteShortcut));
     setPageSize(settings.pageSize);
     setHistoryLimit(settings.historyLimit);
+    setRecommendationsEnabled(settings.recommendationsEnabled);
   };
 
   const handleQuickEdit = (item: HistoryItem) => {
@@ -929,9 +964,6 @@ function MainApp() {
     }
     setPrivacyAction({ id });
   };
-
-  const currentSelectedItem = () =>
-    currentPageItems.find((item) => item.id === selectedId) ?? currentPageItems[0] ?? null;
 
   const openQuickTagPicker = (item: HistoryItem) => {
     setSelectedId(item.id);
@@ -1159,18 +1191,72 @@ function MainApp() {
     };
   }, []);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handlersRef = useRef<Record<string, (...args: any[]) => void>>({});
+
+  const keydownStateRef = useRef({
+    activeView,
+    currentPageItems,
+    privacyAction,
+    quickTagItemId,
+    searchOpen,
+    selectedId,
+    queuedIds,
+    sourceHistory,
+    cardRows,
+    page,
+    totalPages,
+    alwaysOnTop,
+    itemTagShortcut,
+    itemPrivateShortcut,
+    itemPinShortcut,
+    itemDeleteShortcut,
+  });
+  handlersRef.current = {
+    closeQuickTagPicker,
+    openQuickTagPicker,
+    handleDisablePrivacy,
+    handleEnablePrivacy,
+    handleTogglePin,
+    handleDelete,
+    handleCopyFromUI,
+    toggleQueuedItem,
+  };
+  keydownStateRef.current = {
+    activeView,
+    currentPageItems,
+    privacyAction,
+    quickTagItemId,
+    searchOpen,
+    selectedId,
+    queuedIds,
+    sourceHistory,
+    cardRows,
+    page,
+    totalPages,
+    alwaysOnTop,
+    itemTagShortcut,
+    itemPrivateShortcut,
+    itemPinShortcut,
+    itemDeleteShortcut,
+  };
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const s = keydownStateRef.current;
+      const h = handlersRef.current;
+
       if (event.key === "Escape") {
         event.preventDefault();
-        if (privacyAction) return;
-        if (quickTagItemId !== null) {
-          closeQuickTagPicker();
+        if (s.privacyAction) return;
+        if (s.quickTagItemId !== null) {
+          h.closeQuickTagPicker();
           return;
         }
-        if (searchOpen) {
+        if (s.searchOpen) {
           setSearchOpen(false);
           setSearch("");
+          setDebouncedSearch("");
           return;
         }
         return;
@@ -1182,7 +1268,7 @@ function MainApp() {
         return;
       }
 
-      if (activeView === "settings" || activeView === "tag-manager" || privacyAction) return;
+      if (s.activeView === "settings" || s.activeView === "tag-manager" || s.privacyAction) return;
       const target = event.target as HTMLElement | null;
       if (target) {
         const tag = target.tagName.toLowerCase();
@@ -1196,7 +1282,7 @@ function MainApp() {
         event.key === "ArrowRight"
       ) {
         event.preventDefault();
-        navigateGridSelection(
+        navigateGridSelectionRef.current(
           event.key === "ArrowDown"
             ? "down"
             : event.key === "ArrowUp"
@@ -1210,58 +1296,58 @@ function MainApp() {
 
       {
         const shortcut = eventToLocalShortcut(event);
-        const selected = currentSelectedItem();
-        if (selected && shortcut === normalizeLocalShortcut(itemTagShortcut)) {
+        const selected = s.currentPageItems.find((item) => item.id === s.selectedId) ?? s.currentPageItems[0] ?? null;
+        if (selected && shortcut === normalizeLocalShortcut(s.itemTagShortcut)) {
           event.preventDefault();
-          openQuickTagPicker(selected);
+          h.openQuickTagPicker(selected);
           return;
         }
-        if (selected && shortcut === normalizeLocalShortcut(itemPrivateShortcut)) {
+        if (selected && shortcut === normalizeLocalShortcut(s.itemPrivateShortcut)) {
           event.preventDefault();
-          if (selected.isPrivate) handleDisablePrivacy(selected.id);
-          else handleEnablePrivacy(selected.id);
+          if (selected.isPrivate) h.handleDisablePrivacy(selected.id);
+          else h.handleEnablePrivacy(selected.id);
           return;
         }
-        if (selected && shortcut === normalizeLocalShortcut(itemPinShortcut)) {
+        if (selected && shortcut === normalizeLocalShortcut(s.itemPinShortcut)) {
           event.preventDefault();
-          handleTogglePin(selected.id);
+          h.handleTogglePin(selected.id);
           return;
         }
-        if (selected && shortcut === normalizeLocalShortcut(itemDeleteShortcut)) {
+        if (selected && shortcut === normalizeLocalShortcut(s.itemDeleteShortcut)) {
           event.preventDefault();
-          if (quickTagItemId === selected.id) closeQuickTagPicker();
-          handleDelete(selected.id);
+          if (s.quickTagItemId === selected.id) h.closeQuickTagPicker();
+          h.handleDelete(selected.id);
           return;
         }
       }
 
       if (event.key === "Enter") {
         event.preventDefault();
-        if (currentPageItems.length === 0) return;
+        if (s.currentPageItems.length === 0) return;
         const selected =
-          currentPageItems.find((item) => item.id === selectedId) ?? currentPageItems[0];
+          s.currentPageItems.find((item) => item.id === s.selectedId) ?? s.currentPageItems[0];
         setSelectedId(selected.id);
-        handleCopyFromUI(selected);
+        h.handleCopyFromUI(selected);
         return;
       }
 
       if (event.key === " " || event.key === "Tab") {
         event.preventDefault();
         const selected =
-          currentPageItems.find((item) => item.id === selectedId) ?? currentPageItems[0];
+          s.currentPageItems.find((item) => item.id === s.selectedId) ?? s.currentPageItems[0];
         if (!selected) return;
-        toggleQueuedItem(selected.id);
+        h.toggleQueuedItem(selected.id);
         if (event.key === "Tab") {
-          const currentIndex = currentPageItems.findIndex((item) => item.id === selected.id);
-          const nextIndex = Math.min(currentPageItems.length - 1, Math.max(0, currentIndex + 1));
-          setSelectedId(currentPageItems[nextIndex].id);
+          const currentIndex = s.currentPageItems.findIndex((item) => item.id === selected.id);
+          const nextIndex = Math.min(s.currentPageItems.length - 1, Math.max(0, currentIndex + 1));
+          setSelectedId(s.currentPageItems[nextIndex].id);
         }
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeView, currentPageItems, privacyAction, quickTagItemId, searchOpen, selectedId, queuedIds, sourceHistory, cardRows, page, totalPages, alwaysOnTop, itemTagShortcut, itemPrivateShortcut, itemPinShortcut, itemDeleteShortcut]);
+  }, []);
 
   const onTabClick = (key: ActiveView) => {
     if (key === "settings" && activeView === "settings") {
@@ -1373,7 +1459,10 @@ function MainApp() {
               onClick={() => {
                 const next = !searchOpen;
                 setSearchOpen(next);
-                if (!next) setSearch("");
+                if (!next) {
+                  setSearch("");
+                  setDebouncedSearch("");
+                }
               }}
             >
               <Search className="h-4 w-4" />
@@ -1466,7 +1555,16 @@ function MainApp() {
           </button>
       </section>
 
-      <ErrorBanner message={errorMsg} />
+      <ErrorBanner message={errorMsg} onDismiss={() => setErrorMsg(null)} />
+
+      <RecommendationBar
+        locale={locale}
+        enabled={recommendationsEnabled}
+        history={sourceHistory}
+        tagColors={tagColorMap}
+        onCopy={handleCopyFromUI}
+        onPaste={handlePaste}
+      />
 
       <main
         className={`eacptrans-main ${
@@ -1511,20 +1609,17 @@ function MainApp() {
                 </small>
               </button>
             )}
-            {currentPageItems.map((item) => (
+            {currentPageItems.map((item, itemIndex) => (
                 <ClipboardCard
                   key={item.id}
                   item={item}
-                  availableTags={assignableTags.map((tag) => tag.name)}
+                  availableTags={assignableTagNames}
                   tagColors={tagColorMap}
                   isSelected={selectedId === item.id}
                   isCopied={copiedId === item.id}
-                  quickSlot={
-                    page === 0 && currentPageItems.indexOf(item) < 10
-                      ? currentPageItems.indexOf(item) + 1
-                      : null
-                  }
+                  quickSlot={page === 0 && itemIndex < 10 ? itemIndex + 1 : null}
                   queueSlot={queueOrderFor(item.id)}
+                  locale={locale}
                   onCopy={handleCopyFromUI}
                   onPaste={handlePaste}
                   onTogglePin={handleTogglePin}
@@ -1541,7 +1636,7 @@ function MainApp() {
             {page < totalPages - 1 && (
               <button className="eacptrans-page-card" onClick={() => handlePageChange(page + 1)}>
                 <Ellipsis className="h-8 w-8" />
-                <span>Load next</span>
+                <span>{tr(locale, "loadNext")}</span>
                 <small>
                   {page * pageSize + currentPageItems.length + 1}-
                   {Math.min((page + 2) * pageSize, filtered.length)}

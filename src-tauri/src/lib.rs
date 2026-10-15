@@ -7,10 +7,14 @@ use tauri::{
     Manager, PhysicalPosition, WebviewWindowBuilder, WindowEvent,
 };
 
+mod command_extract;
 mod commands;
 mod db;
+mod lan_sync;
+mod ocr;
 mod pipeline;
 mod privacy;
+mod recommend;
 mod shortcuts;
 mod sync;
 
@@ -311,6 +315,7 @@ pub fn run() {
                 Ok::<_, sqlx::Error>(pool)
             })?;
             app.manage(db::AppState { pool });
+            app.manage(lan_sync::LanSyncState::new());
 
             let _ = tauri::async_runtime::block_on(async {
                 let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(1) FROM clipboard_items")
@@ -336,6 +341,8 @@ pub fn run() {
                         .collect::<Vec<_>>()
                 );
             }
+
+            lan_sync::initialize_lan_sync(app.handle());
 
             let show_item = MenuItem::with_id(app, "show", "Show EasyCPTrans", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -411,6 +418,7 @@ pub fn run() {
             commands::is_paste_shortcut_down,
             commands::load_history,
             commands::get_text_item,
+            commands::get_image_content,
             commands::get_privacy_status,
             commands::set_privacy_password,
             commands::protect_item,
@@ -423,16 +431,24 @@ pub fn run() {
             commands::update_text_item,
             commands::create_stack_text_item,
             commands::translate_selected_text,
+            commands::translate_text_api,
+            ocr::ocr_image_item,
             commands::convert_ecdict_csv_to_sqlite,
             commands::save_temp_image,
             commands::read_image_as_data_url,
             commands::get_config,
             commands::set_config,
+            commands::get_frequent_commands,
+            recommend::get_recommendations,
             shortcuts::refresh_global_shortcuts,
             shortcuts::probe_shortcut_available,
             shortcuts::sync_queue_state,
             sync::trigger_sync,
-            sync::verify_webdav
+            sync::verify_webdav,
+            lan_sync::lan_sync_status,
+            lan_sync::set_lan_sync_enabled,
+            lan_sync::trigger_lan_sync,
+            lan_sync::generate_lan_pairing_code_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

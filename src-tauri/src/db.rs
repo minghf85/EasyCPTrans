@@ -84,6 +84,27 @@ pub async fn ensure_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS frequent_commands (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            command_text   TEXT NOT NULL,
+            command_hash   TEXT NOT NULL UNIQUE,
+            count          INTEGER DEFAULT 1,
+            last_used_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+            source_apps    TEXT,
+            first_seen_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_frequent_commands_count
+         ON frequent_commands(count DESC, last_used_at DESC)",
+    )
+    .execute(pool)
+    .await?;
+
     backfill_hashes(pool).await?;
 
     Ok(())
