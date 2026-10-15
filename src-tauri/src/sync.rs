@@ -66,7 +66,6 @@ fn parse_config(app: &AppHandle) -> Result<AppConfig, String> {
                 lan_sync_enabled: false,
                 lan_sync_pairing_code: "".to_string(),
                 lan_sync_port: 0,
-                recommendations_enabled: true,
                 ocr_enabled: true,
                 ocr_auto: true,
                 ocr_language: String::new(),

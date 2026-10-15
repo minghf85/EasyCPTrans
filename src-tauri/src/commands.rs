@@ -347,7 +347,6 @@ pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfi
         lan_sync_enabled: false,
         lan_sync_pairing_code: "".to_string(),
         lan_sync_port: 0,
-        recommendations_enabled: true,
         ocr_enabled: true,
         ocr_auto: true,
         ocr_language: String::new(),
@@ -362,34 +361,6 @@ pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfi
 
 pub(crate) async fn emit_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("clipboard-changed", ());
-}
-
-/// Records the ordered pair "the user had X, then moved on to Y". This is the
-/// signal behind paste recommendations: what normally follows what.
-pub(crate) async fn record_item_transition(
-    state: &AppState,
-    item_id: i64,
-) -> Result<(), String> {
-    let previous = state
-        .last_item_id
-        .swap(item_id, std::sync::atomic::Ordering::Relaxed);
-    if previous <= 0 || previous == item_id {
-        return Ok(());
-    }
-
-    sqlx::query(
-        "INSERT INTO item_transitions (from_id, to_id, count, last_at)
-         VALUES (?1, ?2, 1, CURRENT_TIMESTAMP)
-         ON CONFLICT(from_id, to_id)
-         DO UPDATE SET count = count + 1, last_at = CURRENT_TIMESTAMP",
-    )
-    .bind(previous)
-    .bind(item_id)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    Ok(())
 }
 
 fn normalize_word_query(value: &str) -> Option<String> {
@@ -1151,11 +1122,6 @@ pub async fn ingest_clipboard(
 
     emit_changed(&app).await;
 
-    // Feed the recommendation model: what was copied right before this item.
-    if let Err(err) = record_item_transition(&state, item_id).await {
-        println!("[EasyCPTrans] Transition record failed: {}", err);
-    }
-
     // Fresh screenshots are recognized in the background so the image becomes
     // searchable by its text without the user asking for it.
     if !deduped && processed.content_type == "image" {
@@ -1771,7 +1737,6 @@ pub async fn mark_used(app: AppHandle, state: State<'_, AppState>, id: i64) -> R
     .execute(&state.pool)
     .await
     .map_err(|e| e.to_string())?;
-    record_item_transition(&state, id).await?;
     emit_changed(&app).await;
     Ok(())
 }
@@ -2500,8 +2465,6 @@ pub struct AppConfig {
     #[serde(default = "default_lan_sync_port")]
     pub lan_sync_port: u16,
     #[serde(default = "default_bool_true")]
-    pub recommendations_enabled: bool,
-    #[serde(default = "default_bool_true")]
     pub ocr_enabled: bool,
     #[serde(default = "default_bool_true")]
     pub ocr_auto: bool,
@@ -2692,7 +2655,6 @@ pub struct ConfigResponse {
     pub lan_sync_enabled: bool,
     pub lan_sync_pairing_code: String,
     pub lan_sync_port: u16,
-    pub recommendations_enabled: bool,
     pub ocr_enabled: bool,
     pub ocr_auto: bool,
     pub ocr_language: String,
@@ -2739,7 +2701,6 @@ pub struct PartialAppConfig {
     pub lan_sync_enabled: Option<bool>,
     pub lan_sync_pairing_code: Option<String>,
     pub lan_sync_port: Option<u16>,
-    pub recommendations_enabled: Option<bool>,
     pub ocr_enabled: Option<bool>,
     pub ocr_auto: Option<bool>,
     pub ocr_language: Option<String>,
@@ -2798,7 +2759,6 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
         lan_sync_enabled: conf.lan_sync_enabled,
         lan_sync_pairing_code: conf.lan_sync_pairing_code,
         lan_sync_port: conf.lan_sync_port,
-        recommendations_enabled: conf.recommendations_enabled,
         ocr_enabled: conf.ocr_enabled,
         ocr_auto: conf.ocr_auto,
         ocr_language: conf.ocr_language,
@@ -2915,9 +2875,6 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
     }
     if let Some(value) = config.lan_sync_port {
         merged.lan_sync_port = value;
-    }
-    if let Some(value) = config.recommendations_enabled {
-        merged.recommendations_enabled = value;
     }
     if let Some(value) = config.ocr_enabled {
         merged.ocr_enabled = value;

@@ -15,7 +15,6 @@ mod ocr;
 mod pipeline;
 mod privacy;
 mod process_stats;
-mod recommend;
 mod shortcuts;
 mod sync;
 
@@ -315,7 +314,7 @@ pub fn run() {
                 db::ensure_schema(&pool).await?;
                 Ok::<_, sqlx::Error>(pool)
             })?;
-            app.manage(db::AppState::new(pool));
+            app.manage(db::AppState { pool });
             app.manage(lan_sync::LanSyncState::new());
 
             let _ = tauri::async_runtime::block_on(async {
@@ -444,7 +443,6 @@ pub fn run() {
             commands::get_config,
             commands::set_config,
             commands::get_frequent_commands,
-            recommend::get_recommendations,
             shortcuts::refresh_global_shortcuts,
             shortcuts::probe_shortcut_available,
             shortcuts::sync_queue_state,

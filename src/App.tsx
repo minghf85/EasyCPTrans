@@ -1,8 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { writeFiles, writeImage, writeText } from "tauri-plugin-clipboard-x-api";
 import { listen } from "@tauri-apps/api/event";
-import { LogicalSize } from "@tauri-apps/api/dpi";
-import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   CheckSquare,
   ChevronLeft,
@@ -20,7 +19,6 @@ import {
   Tags,
   Search,
   Settings2,
-  Sparkles,
   Square,
   Star,
 } from "lucide-react";
@@ -35,7 +33,6 @@ import { PasswordPromptModal } from "./components/PasswordPromptModal";
 import { QuickTextEditorPage } from "./components/QuickTextEditorPage";
 import { SettingsModal } from "./components/SettingsModal";
 import type { SettingsModalHandle } from "./components/SettingsModal";
-import { RecommendationStrip } from "./components/RecommendationStrip";
 import { TagManagementPage } from "./components/TagManagementPage";
 import { resetClipboardStack, useClipboardWatcher, setInjectedOverrideSig } from "./hooks/useClipboardWatcher";
 import { useHistory } from "./hooks/useHistory";
@@ -62,10 +59,6 @@ const DEFAULT_ITEM_PRIVATE_SHORTCUT = "M";
 const DEFAULT_ITEM_PIN_SHORTCUT = "P";
 const DEFAULT_ITEM_DELETE_SHORTCUT = "Delete";
 const DEFAULT_ITEM_OCR_SHORTCUT = "O";
-/// Height the recommendation strip adds: header + one 220px card row + padding.
-const RECOMMEND_STRIP_HEIGHT = 268;
-/// Below this the strip would squeeze the history out, so the window grows.
-const RECOMMEND_GROW_THRESHOLD = 588;
 const DEFAULT_TAG_COLOR = "#0f6cbd";
 const SYSTEM_TAGS: Array<ManagedTag & { key: ActiveView }> = [
   { id: "sys-text", name: "Text", common: true, color: "#0078d4", system: true, key: "text" },
@@ -214,9 +207,6 @@ function MainApp() {
   const [locale, setLocale] = useState<Locale>("zh-CN");
   const [pageSize, setPageSize] = useState(50);
   const [historyLimit, setHistoryLimit] = useState(5000);
-  const [recommendationsEnabled, setRecommendationsEnabled] = useState(true);
-  const [recommendationsOpen, setRecommendationsOpen] = useState(false);
-  const grownFromRef = useRef<{ from: number; to: number } | null>(null);
   const [ocrPanel, setOcrPanel] = useState<{ item: HistoryItem; text: string } | null>(null);
   const [ocrBusyId, setOcrBusyId] = useState<number | null>(null);
   const ocrBusyIdRef = useRef<number | null>(null);
@@ -302,7 +292,6 @@ function MainApp() {
         if (typeof cfg.alwaysOnTop === "boolean") setAlwaysOnTop(cfg.alwaysOnTop);
         if (typeof cfg.pageSize === "number") setPageSize(cfg.pageSize);
         if (typeof cfg.historyLimit === "number") setHistoryLimit(cfg.historyLimit);
-        setRecommendationsEnabled(cfg.recommendationsEnabled !== false);
         setApiTranslateEnabled(Boolean(cfg.apiTranslateEnabled));
         setOcrEnabled(cfg.ocrEnabled !== false);
         setShowMemoryUsage(Boolean(cfg.showMemoryUsage));
@@ -547,13 +536,11 @@ function MainApp() {
 
     const unbindTabs = bindHorizontalWheel("filter-scroll");
     const unbindCards = bindHorizontalWheel("card-scroll");
-    const unbindRecommendations = bindHorizontalWheel("recommend-scroll");
     return () => {
       unbindTabs();
       unbindCards();
-      unbindRecommendations();
     };
-  }, [activeView, currentPageItems.length, recommendationsOpen]);
+  }, [activeView, currentPageItems.length]);
 
   useEffect(() => {
     const node = cardStripRef.current;
@@ -987,7 +974,6 @@ function MainApp() {
     apiTranslateKey: string;
     apiTranslateModel: string;
     apiTranslateTargetLang: string;
-    recommendationsEnabled: boolean;
     ocrEnabled: boolean;
     showMemoryUsage: boolean;
     locale: Locale;
@@ -1003,48 +989,9 @@ function MainApp() {
     setItemOcrShortcut(normalizeLocalShortcut(settings.itemOcrShortcut));
     setPageSize(settings.pageSize);
     setHistoryLimit(settings.historyLimit);
-    setRecommendationsEnabled(settings.recommendationsEnabled);
     setShowMemoryUsage(settings.showMemoryUsage);
     setApiTranslateEnabled(settings.apiTranslateEnabled);
     setOcrEnabled(settings.ocrEnabled);
-  };
-
-  /**
-   * The recommendation strip needs a full card row of its own. On a short panel
-   * that would squeeze the history out, so the window grows to fit both and
-   * shrinks back when the strip is closed.
-   */
-  const toggleRecommendations = async () => {
-    const next = !recommendationsOpen;
-    setRecommendationsOpen(next);
-
-    try {
-      const appWindow = getCurrentWindow();
-      const size = await appWindow.innerSize();
-      const scale = await appWindow.scaleFactor();
-      const currentHeight = size.height / scale;
-
-      if (next) {
-        if (currentHeight >= RECOMMEND_GROW_THRESHOLD) return;
-        const monitor = await currentMonitor();
-        const maxHeight = monitor
-          ? monitor.size.height / monitor.scaleFactor
-          : currentHeight + RECOMMEND_STRIP_HEIGHT;
-        const target = Math.min(currentHeight + RECOMMEND_STRIP_HEIGHT, maxHeight - 40);
-        if (target <= currentHeight) return;
-        grownFromRef.current = { from: currentHeight, to: target };
-        await appWindow.setSize(new LogicalSize(size.width / scale, target));
-      } else {
-        const grown = grownFromRef.current;
-        grownFromRef.current = null;
-        // Only restore when the window is still where we left it, so a manual
-        // resize while the strip was open is not thrown away.
-        if (!grown || Math.abs(currentHeight - grown.to) > 8) return;
-        await appWindow.setSize(new LogicalSize(size.width / scale, grown.from));
-      }
-    } catch (err) {
-      console.error("Window resize for recommendations failed:", err);
-    }
   };
 
   const handleQuickEdit = (item: HistoryItem) => {
@@ -1694,16 +1641,6 @@ function MainApp() {
             <ChevronRight className="h-4 w-4" />
           </button>
 
-          {recommendationsEnabled && (
-            <button
-              className={`eacptrans-icon-btn ${recommendationsOpen ? "active" : ""}`}
-              title={tr(locale, "recommendToggle")}
-              onClick={() => void toggleRecommendations()}
-            >
-              <Sparkles className="h-4 w-4" />
-            </button>
-          )}
-
           {showMemoryUsage && (
             <MemoryChip
               locale={locale}
@@ -1715,43 +1652,6 @@ function MainApp() {
       </section>
 
       <ErrorBanner message={errorMsg} onDismiss={() => setErrorMsg(null)} />
-
-      {recommendationsEnabled &&
-        recommendationsOpen &&
-        activeView !== "settings" &&
-        activeView !== "tag-manager" && (
-        <RecommendationStrip
-          locale={locale}
-          version={sourceHistory.length}
-          onCollapse={() => void toggleRecommendations()}
-          renderCard={(recommendation) => (
-            <ClipboardCard
-              key={recommendation.item.id}
-              item={recommendation.item}
-              recommendReason={recommendation.reason}
-              elementId={null}
-              availableTags={assignableTagNames}
-              tagColors={tagColorMap}
-              isCopied={copiedId === recommendation.item.id}
-              locale={locale}
-              onCopy={handleCopyFromUI}
-              onPaste={handlePaste}
-              onTogglePin={handleTogglePin}
-              onDelete={handleDelete}
-              onToggleTag={handleToggleTag}
-              onCreateTag={handleCreateAndAttachTag}
-              onEnablePrivacy={handleEnablePrivacy}
-              onDisablePrivacy={handleDisablePrivacy}
-              onQuickEdit={handleQuickEdit}
-              onOcrOpen={handleOcrOpen}
-              onNotify={setErrorMsg}
-              ocrBusy={ocrBusyId === recommendation.item.id}
-              ocrEnabled={ocrEnabled}
-              apiTranslateEnabled={apiTranslateEnabled}
-            />
-          )}
-        />
-      )}
 
       <main
         className={`eacptrans-main ${

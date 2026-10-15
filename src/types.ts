@@ -19,14 +19,6 @@ export interface ManagedTag {
   system?: boolean;
 }
 
-export type RecommendationReason = "sequence" | "similar" | "app" | "frequent";
-
-export interface Recommendation {
-  item: HistoryItem;
-  reason: RecommendationReason;
-  score: number;
-}
-
 export interface IngestResult {
   accepted: boolean;
   itemId: number | null;

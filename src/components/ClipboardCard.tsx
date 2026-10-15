@@ -18,22 +18,14 @@ import {
   ScanText,
   Shield,
   Square,
-  Sparkles,
   Tag,
   Trash2,
 } from "lucide-react";
 import { formatExactTime, formatTime } from "../lib/time";
 import { api } from "../lib/api";
 import { fetchImageDataUrl } from "../lib/imageCache";
-import { tr, type I18nKey, type Locale } from "../lib/i18n";
-import type { HistoryItem, RecommendationReason } from "../types";
-
-const RECOMMEND_REASON_KEYS: Record<RecommendationReason, I18nKey> = {
-  sequence: "reasonSequence",
-  similar: "reasonSimilar",
-  app: "reasonApp",
-  frequent: "reasonFrequent",
-};
+import { tr, type Locale } from "../lib/i18n";
+import type { HistoryItem } from "../types";
 
 function formatBytes(bytes: number, decimals = 1) {
   if (!+bytes) return "0 B";
@@ -182,13 +174,6 @@ interface Props {
   ocrBusy?: boolean;
   ocrEnabled?: boolean;
   apiTranslateEnabled?: boolean;
-  /** Why this item is being suggested — shown as a chip on recommendation cards. */
-  recommendReason?: RecommendationReason;
-  /**
-   * Anchor id used for scroll-into-view. Recommendation cards pass `null` so the
-   * same item rendered twice does not produce duplicate ids.
-   */
-  elementId?: string | null;
   tagMenuOpen?: boolean;
   onTagMenuClose?: () => void;
 }
@@ -216,8 +201,6 @@ export const ClipboardCard = memo(function ClipboardCard({
   ocrBusy = false,
   ocrEnabled = true,
   apiTranslateEnabled = false,
-  recommendReason,
-  elementId,
   tagMenuOpen = false,
   onTagMenuClose,
 }: Props) {
@@ -244,6 +227,7 @@ export const ClipboardCard = memo(function ClipboardCard({
   const translationState = translationStatus(item);
   const translationWord = translationQuery(item);
   const ocrText = item.metadata?.ocrText?.[0] ?? "";
+  const showOcrAction = item.contentType === "image" && !hasPrivacy && (ocrEnabled || ocrText);
   const isTranslationItem = item.tags.includes("Word") || Boolean(translationState || translationWord);
   const displayTags = item.tags.filter((tag) => !isRedundantMetaTag(item, tag));
   const tagColorFor = (tag: string) => tagColors[tag.toLowerCase()];
@@ -457,7 +441,7 @@ export const ClipboardCard = memo(function ClipboardCard({
 
   return (
     <article
-      id={elementId === null ? undefined : elementId ?? `history-item-${item.id}`}
+      id={`history-item-${item.id}`}
       className={`eacptrans-card ${isSelected ? "selected" : ""}`}
     >
       <div className="eacptrans-card-head">
@@ -468,24 +452,28 @@ export const ClipboardCard = memo(function ClipboardCard({
           <span className="eacptrans-card-appname">{sourceApp(item)}</span>
         </div>
 
-        {quickSlot && <span className="eacptrans-card-quick-badge">#{quickSlot}</span>}
+        {(quickSlot || showOcrAction) && (
+          <div className="eacptrans-card-head-actions">
+            {quickSlot && <span className="eacptrans-card-quick-badge">#{quickSlot}</span>}
 
-        {item.contentType === "image" && !hasPrivacy && (ocrEnabled || ocrText) && (
-          <button
-            className={`eacptrans-card-ocr-btn ${ocrBusy ? "busy" : ""} ${ocrText ? "has-text" : ""}`}
-            disabled={ocrBusy}
-            title={locale ? tr(locale, ocrBusy ? "ocrRunning" : ocrText ? "ocrText" : "ocrScan") : "OCR"}
-            onClick={(event) => {
-              event.stopPropagation();
-              onOcrOpen(item);
-            }}
-          >
-            {ocrBusy ? (
-              <Loader2 className="eacptrans-card-ocr-icon h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <ScanText className="eacptrans-card-ocr-icon h-3.5 w-3.5" />
+            {showOcrAction && (
+              <button
+                className={`eacptrans-card-ocr-btn ${ocrBusy ? "busy" : ""} ${ocrText ? "has-text" : ""}`}
+                disabled={ocrBusy}
+                title={locale ? tr(locale, ocrBusy ? "ocrRunning" : ocrText ? "ocrText" : "ocrScan") : "OCR"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOcrOpen(item);
+                }}
+              >
+                {ocrBusy ? (
+                  <Loader2 className="eacptrans-card-ocr-icon h-4 w-4 animate-spin" />
+                ) : (
+                  <ScanText className="eacptrans-card-ocr-icon h-4 w-4" />
+                )}
+              </button>
             )}
-          </button>
+          </div>
         )}
 
         <button
@@ -696,12 +684,6 @@ export const ClipboardCard = memo(function ClipboardCard({
       {renderBody()}
 
       <div className="eacptrans-meta-strip" onClick={(e) => e.stopPropagation()} onWheel={(event) => stopOuterScroll(event, "x")}>
-        {recommendReason && (
-          <span className={`eacptrans-meta-item eacptrans-meta-reason reason-${recommendReason}`}>
-            <Sparkles className="h-3 w-3" />
-            {locale ? tr(locale, RECOMMEND_REASON_KEYS[recommendReason]) : recommendReason}
-          </span>
-        )}
         <span className={`eacptrans-meta-item eacptrans-type-badge ${typeBadgeClass}`} style={tagStyleFor(typeTagName)}>{typeLabel}</span>
         <span className="eacptrans-meta-item" title={formatExactTime(item.lastUsedAt)}>
           <Clock3 className="h-3 w-3" />

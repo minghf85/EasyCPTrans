@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Cloud, Folder, RefreshCw, ScanText, Shield, Sparkles, Terminal, Wifi } from "lucide-react";
+import { Cloud, Folder, RefreshCw, ScanText, Shield, Terminal, Wifi } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
 import { LOCALE_OPTIONS, normalizeLocale, tr, type Locale } from "../lib/i18n";
@@ -31,7 +31,6 @@ interface Props {
     apiTranslateKey: string;
     apiTranslateModel: string;
     apiTranslateTargetLang: string;
-    recommendationsEnabled: boolean;
     ocrEnabled: boolean;
     showMemoryUsage: boolean;
     locale: Locale;
@@ -301,7 +300,6 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
   const [webdavBusy, setWebdavBusy] = useState(false);
   const [webdavMessage, setWebdavMessage] = useState("");
 
-  const [recommendationsEnabled, setRecommendationsEnabled] = useState(true);
   const [ocrEnabled, setOcrEnabled] = useState(true);
   const [ocrAuto, setOcrAuto] = useState(true);
   const [ocrLanguage, setOcrLanguage] = useState("");
@@ -443,7 +441,6 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         setApiTranslateKey(cfg.apiTranslateKey || "");
         setApiTranslateModel(cfg.apiTranslateModel || "gpt-4o-mini");
         setApiTranslateTargetLang(cfg.apiTranslateTargetLang || "");
-        setRecommendationsEnabled(cfg.recommendationsEnabled !== false);
         setOcrEnabled(cfg.ocrEnabled !== false);
         setOcrAuto(cfg.ocrAuto !== false);
         setOcrLanguage(cfg.ocrLanguage || "");
@@ -525,7 +522,6 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         apiTranslateKey: apiTranslateKey.trim(),
         apiTranslateModel: apiTranslateModel.trim() || "gpt-4o-mini",
         apiTranslateTargetLang: apiTranslateTargetLang.trim(),
-        recommendationsEnabled,
         ocrEnabled,
         ocrAuto,
         ocrLanguage: ocrLanguage.trim(),
@@ -575,7 +571,6 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         apiTranslateKey,
         apiTranslateModel,
         apiTranslateTargetLang,
-        recommendationsEnabled,
         ocrEnabled,
         showMemoryUsage,
         locale: selectedLocale,
@@ -1064,23 +1059,13 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         <section className="eacptrans-settings-card">
           <div className="eacptrans-settings-head">
             <h2>
-              <Sparkles className="h-4 w-4" />
-              {tr(selectedLocale, "recommendations")}
+              <Terminal className="h-4 w-4" />
+              {tr(selectedLocale, "frequentCommands")}
             </h2>
-            <p>{tr(selectedLocale, "recommendationsDesc")}</p>
+            <p>{tr(selectedLocale, "frequentCommandsDesc")}</p>
           </div>
 
-          <label className="eacptrans-checkrow">
-            <input
-              type="checkbox"
-              checked={recommendationsEnabled}
-              onChange={(e) => setRecommendationsEnabled(e.target.checked)}
-            />
-            <span>{tr(selectedLocale, "enableRecommendations")}</span>
-          </label>
-
           <div className="eacptrans-settings-peer-list">
-            <strong>{tr(selectedLocale, "frequentCommands")}</strong>
             <FrequentCommandsList locale={selectedLocale} />
           </div>
         </section>
