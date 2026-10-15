@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { HistoryItem, IngestResult, ManagedTag } from "../types";
+import type { HistoryItem, IngestResult, ManagedTag, Recommendation } from "../types";
 import type { Locale } from "./i18n";
 
 // 单一入口封装所有 Rust 命令调用，方便集中替换/Mock。
@@ -134,10 +134,9 @@ export const api = {
   getFrequentCommands: (limit = 20) =>
     invoke<Array<{ id: number; commandText: string; count: number; lastUsedAt: string | null; sourceApps: string[] }>>("get_frequent_commands", { limit }),
 
-  getRecommendations: (options?: { activeWindow?: string; currentText?: string; limit?: number }) =>
-    invoke<HistoryItem[]>("get_recommendations", {
+  getRecommendations: (options?: { activeWindow?: string; limit?: number }) =>
+    invoke<Recommendation[]>("get_recommendations", {
       activeWindow: options?.activeWindow ?? "",
-      currentText: options?.currentText ?? "",
       limit: options?.limit ?? 5,
     }),
 

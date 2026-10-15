@@ -1365,67 +1365,149 @@
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08), 0 3px 6px rgba(0, 0, 0, 0.06);
 }
 
-.eacptrans-image-ocr-btn {
+.eacptrans-card-ocr-btn {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
-  display: inline-flex;
+  top: -4px;
+  right: 26px;
+  z-index: 30;
+  display: flex;
+  height: 26px;
+  width: 26px;
   align-items: center;
-  gap: 4px;
-  max-width: calc(100% - 16px);
-  border: 1px solid #b8d8f8;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.94);
-  padding: 4px 8px;
-  font-size: 10.5px;
-  color: #0067c0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #5a5a5a;
   opacity: 0;
-  transition: opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+  transition: opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  cursor: pointer;
 }
 
-.eacptrans-image-ocr-btn span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.eacptrans-card-body-image:hover .eacptrans-image-ocr-btn,
-.eacptrans-image-ocr-btn.has-text,
-.eacptrans-image-ocr-btn.running {
+/* Stays out of the way until the card is hovered — the meta strip carries the
+   permanent "N chars" affordance instead. */
+.eacptrans-card:hover .eacptrans-card-ocr-btn,
+.eacptrans-card-ocr-btn.busy,
+.eacptrans-card-ocr-btn:focus-visible {
   opacity: 1;
 }
 
-.eacptrans-image-ocr-btn:hover {
-  background: #f0f7ff;
-  border-color: #0067c0;
+.eacptrans-card-ocr-btn.has-text,
+.eacptrans-card-ocr-btn.busy {
+  color: #0067c0;
 }
 
-.eacptrans-image-ocr-btn.running {
-  border-color: #d0d0d0;
-  color: #5a5a5a;
+.eacptrans-card-ocr-btn:hover {
+  background: #ebebeb;
+  border-color: #e0e0e0;
+  color: #1a1a1a;
 }
 
-.eacptrans-image-ocr-btn:disabled {
+.eacptrans-card-ocr-btn:disabled {
   cursor: default;
 }
 
 .eacptrans-meta-ocr {
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.eacptrans-meta-ocr:hover {
+  background: #f0f0f0;
+  color: #0067c0;
+}
+
+.eacptrans-meta-reason {
   border: 1px solid #d6e8f7;
   border-radius: 10px;
   background: #f7fbff;
   padding: 2px 8px;
   color: #0067c0;
-  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.eacptrans-meta-ocr:hover {
-  background: #e6f2ff;
-  border-color: #0067c0;
+.eacptrans-meta-reason.reason-similar,
+.eacptrans-meta-reason.reason-app,
+.eacptrans-meta-reason.reason-frequent {
+  border-color: #e6e6e6;
+  background: #f7f7f7;
+  color: #5a5a5a;
 }
 
 .eacptrans-card-body-image {
   position: relative;
+}
+
+.eacptrans-recommend-strip {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 8px;
+  border-bottom: 1px solid #eaeaea;
+  background: #fafcff;
+  padding: 8px 0 10px;
+  animation: eacptrans-slide-down 0.18s ease both;
+}
+
+.eacptrans-recommend-strip-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  font-size: 11px;
+  font-weight: 650;
+  color: #0067c0;
+}
+
+.eacptrans-recommend-strip-count {
+  border-radius: 10px;
+  background: #e6f2ff;
+  padding: 1px 7px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #0067c0;
+}
+
+.eacptrans-recommend-strip-hint {
+  font-weight: 500;
+  color: #8a8a8a;
+}
+
+.eacptrans-recommend-strip-hide {
+  display: flex;
+  height: 22px;
+  width: 22px;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #5a5a5a;
+  transition: 0.15s ease;
+}
+
+.eacptrans-recommend-strip-hide:hover {
+  border-color: #e0e0e0;
+  background: #f0f0f0;
+  color: #1a1a1a;
+}
+
+.eacptrans-recommend-strip-cards {
+  --card-height: 220px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(280px, 296px);
+  grid-template-rows: var(--card-height);
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 1px 0 2px 1px;
+  scrollbar-width: thin;
+}
+
+.eacptrans-recommend-strip-empty {
+  font-size: 11.5px;
+  color: #8a8a8a;
+  padding: 4px 2px;
 }
 
 .eacptrans-ocr-panel {
@@ -1696,105 +1778,6 @@
   animation: eacptrans-fade-in 0.18s ease both;
 }
 
-.eacptrans-recommend-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border-bottom: 1px solid #eaeaea;
-  background: #fafcff;
-  padding: 10px 12px;
-}
-
-.eacptrans-recommend-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 650;
-  color: #0067c0;
-}
-
-.eacptrans-recommend-list {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  overscroll-behavior: contain;
-}
-
-.eacptrans-recommend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  max-width: 280px;
-  border: 1px solid #d6e8f7;
-  border-radius: 8px;
-  background: #fff;
-  padding: 6px 8px;
-  text-align: left;
-  font-size: 11px;
-  color: #333;
-  cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
-}
-
-.eacptrans-recommend-item:hover {
-  border-color: #0067c0;
-  background: #f0f7ff;
-  transform: translateY(-1px);
-}
-
-.eacptrans-recommend-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.eacptrans-recommend-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-.eacptrans-recommend-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  border-radius: 10px;
-  border: 1px solid #e0e0e0;
-  background: #f0f0f0;
-  padding: 1px 6px;
-  font-size: 9.5px;
-  color: #5a5a5a;
-}
-
-.eacptrans-recommend-copy {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  padding: 3px;
-  color: #777;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
-.eacptrans-recommend-copy:hover {
-  background: #e5e5e5;
-  color: #333;
-}
-
-.eacptrans-recommend-shimmer {
-  height: 2px;
-  background: linear-gradient(90deg, transparent, #0067c055, transparent);
-  background-size: 200% 100%;
-  animation: eacptrans-shimmer 1.2s infinite;
-}
-
 .eacptrans-flex-row {
   display: flex;
   align-items: center;
@@ -1829,9 +1812,11 @@
   .eacptrans-modal-panel,
   .eacptrans-banner-in,
   .eacptrans-page-in,
-  .eacptrans-image-ocr-btn,
+  .eacptrans-card-ocr-btn,
   .eacptrans-ocr-btn,
   .eacptrans-ocr-close,
+  .eacptrans-recommend-strip,
+  .eacptrans-recommend-strip-hide,
   .eacptrans-memory-chip {
     animation: none !important;
     transition: none !important;

@@ -364,6 +364,34 @@ pub(crate) async fn emit_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("clipboard-changed", ());
 }
 
+/// Records the ordered pair "the user had X, then moved on to Y". This is the
+/// signal behind paste recommendations: what normally follows what.
+pub(crate) async fn record_item_transition(
+    state: &AppState,
+    item_id: i64,
+) -> Result<(), String> {
+    let previous = state
+        .last_item_id
+        .swap(item_id, std::sync::atomic::Ordering::Relaxed);
+    if previous <= 0 || previous == item_id {
+        return Ok(());
+    }
+
+    sqlx::query(
+        "INSERT INTO item_transitions (from_id, to_id, count, last_at)
+         VALUES (?1, ?2, 1, CURRENT_TIMESTAMP)
+         ON CONFLICT(from_id, to_id)
+         DO UPDATE SET count = count + 1, last_at = CURRENT_TIMESTAMP",
+    )
+    .bind(previous)
+    .bind(item_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 fn normalize_word_query(value: &str) -> Option<String> {
     let normalized = value
         .split_whitespace()
@@ -1123,6 +1151,11 @@ pub async fn ingest_clipboard(
 
     emit_changed(&app).await;
 
+    // Feed the recommendation model: what was copied right before this item.
+    if let Err(err) = record_item_transition(&state, item_id).await {
+        println!("[EasyCPTrans] Transition record failed: {}", err);
+    }
+
     // Fresh screenshots are recognized in the background so the image becomes
     // searchable by its text without the user asking for it.
     if !deduped && processed.content_type == "image" {
@@ -1738,6 +1771,7 @@ pub async fn mark_used(app: AppHandle, state: State<'_, AppState>, id: i64) -> R
     .execute(&state.pool)
     .await
     .map_err(|e| e.to_string())?;
+    record_item_transition(&state, id).await?;
     emit_changed(&app).await;
     Ok(())
 }

@@ -315,7 +315,7 @@ pub fn run() {
                 db::ensure_schema(&pool).await?;
                 Ok::<_, sqlx::Error>(pool)
             })?;
-            app.manage(db::AppState { pool });
+            app.manage(db::AppState::new(pool));
             app.manage(lan_sync::LanSyncState::new());
 
             let _ = tauri::async_runtime::block_on(async {

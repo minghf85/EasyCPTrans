@@ -2,9 +2,22 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::path::Path;
+use std::sync::atomic::AtomicI64;
 
 pub struct AppState {
     pub pool: SqlitePool,
+    /// Most recently copied/used item, used as the seed for recommendations.
+    pub last_item_id: AtomicI64,
+}
+
+impl AppState {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self {
+            pool,
+            // 0 is never a valid rowid, so it doubles as "nothing yet".
+            last_item_id: AtomicI64::new(0),
+        }
+    }
 }
 
 pub fn compute_hash(content_type: &str, content: &str) -> String {
@@ -101,6 +114,28 @@ pub async fn ensure_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_frequent_commands_count
          ON frequent_commands(count DESC, last_used_at DESC)",
+    )
+    .execute(pool)
+    .await?;
+
+    // "You used X, then you used Y" pairs — the signal behind paste
+    // recommendations. One row per ordered pair, pruned of deleted items.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS item_transitions (
+            from_id  INTEGER NOT NULL,
+            to_id    INTEGER NOT NULL,
+            count    INTEGER NOT NULL DEFAULT 1,
+            last_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (from_id, to_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM item_transitions
+         WHERE from_id NOT IN (SELECT id FROM clipboard_items)
+            OR to_id NOT IN (SELECT id FROM clipboard_items)",
     )
     .execute(pool)
     .await?;

@@ -28,6 +28,7 @@ English · [简体中文](./README_ZH_CN.md) · [繁體中文](./README_ZH_TW.md
 - **📦 Stack Copy** — Merge multiple copied snippets into a single item to preserve context.
 - **🖥️ Multi-Device Sync** — Sync data via WebDAV, with each item automatically tagged by source device.
 - **📡 LAN Sync** — Discover devices on the same network via mDNS and sync with a shared pairing code.
+- **✨ Paste Recommendations** — Suggests what you are likely to need next, learned from what you copied before.
 - **🔍 Advanced Search** — Combine keywords, phrases, tags, types, time ranges, and sizes for precise filtering.
 - **⚡ Global Hotkeys** — Every action is accessible via keyboard shortcuts — efficiency first.
 - **💾 Memory Readout** — Optionally show the app's current memory usage in the toolbar.
@@ -158,7 +159,7 @@ Text inside a screenshot — an error message, a code snippet, an invoice, a cha
 
 | Entry point | Action |
 | --- | --- |
-| Image card | Hover the image and click **Extract text** in the bottom-right corner |
+| Image card | Hover the card and click the text-recognition icon in the top-right corner |
 | Card menu | `⌄` → `OCR` |
 | Keyboard | Select an image item and press `O` |
 
@@ -190,6 +191,29 @@ Settings → Time & language → Language & region → (language) → Language o
 ```
 
 `Settings → OCR Text Recognition → Recognition language` lists what is installed; leave it on `Automatic` to follow your Windows languages.
+
+---
+
+## ✨ Paste Recommendations
+
+The deck keeps a small model of what you reach for, and offers the likely next item as a row of normal cards.
+
+| Action | Description |
+| --- | --- |
+| Open | Click `✨` in the toolbar — hidden by default |
+| Close | Click `✨` again, or the `⌄` in the strip header |
+| Use a suggestion | Any card action works: paste, copy, pin, tag, delete |
+
+### How It Picks
+
+| Reason chip | Meaning |
+| --- | --- |
+| `Usually follows this` | When you last had this content, you went on to use that item |
+| `Similar content` | Shares wording with what you just copied |
+| `Same app` | Comes from the app you are currently in |
+| `Recently used` | Frequently used and touched recently |
+
+The pairs behind `Usually follows this` are learned locally from your own copies — nothing leaves the machine. Recommendations are off entirely if you disable them in `Settings → Smart Recommendations`.
 
 ---
 
