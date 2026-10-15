@@ -355,6 +355,23 @@ cargo check --manifest-path src-tauri/Cargo.toml
 pnpm tauri build
 ```
 
+### 持續整合
+
+每次 push 到 `main`，`.github/workflows/build.yml` 會在 Windows 執行器上執行：Rust 單元測試 → `pnpm build` → `pnpm tauri build`。產物 `EasyCPTrans-installers`（`.exe` 與 `.msi`）可在該次執行的 **Artifacts** 直接下載，一般 push 不會發佈任何 release。
+
+### 發佈新版本
+
+1. 同時修改三處版本號，必須一致：`src-tauri/tauri.conf.json`、`package.json`、`src-tauri/Cargo.toml`。
+2. 提交並推送。
+3. 建立 tag 並推送：
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+推送 tag 會觸發同一套建置，接著自動建立 GitHub Release。版本說明由 `.github/scripts/release-notes.sh` 依據上一個 tag 以來的提交自動產生，按 新功能 / 修正 / 文件 等分類，並附上安裝檔清單與對比連結。含連字號的 tag（如 `v0.2.0-rc.1`）會發佈為 pre-release。若 tag 與三處版本號不一致，任務會在發佈前失敗，避免發出標錯版本的安裝檔。
+
 ---
 
 ## 🗺️ 路線圖
