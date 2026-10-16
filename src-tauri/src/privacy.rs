@@ -71,6 +71,90 @@ pub fn has_security_question(cfg: &PrivacyConfig) -> bool {
     !cfg.security_question.trim().is_empty() && !cfg.security_answer_hash.is_empty()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Argon2 with the default parameters is deliberately slow, so these tests
+    /// share one configured instance instead of hashing once per assertion.
+    fn configured() -> PrivacyConfig {
+        let mut cfg = PrivacyConfig::default();
+        set_password(&mut cfg, None, "hunter2secret", "Pet name?", "rex").unwrap();
+        cfg
+    }
+
+    #[test]
+    fn a_fresh_config_has_neither_password_nor_question() {
+        let cfg = PrivacyConfig::default();
+
+        assert!(!has_password(&cfg));
+        assert!(!has_security_question(&cfg));
+        assert!(verify_password(&cfg, "anything").is_err());
+    }
+
+    #[test]
+    fn set_password_validates_and_guards_replacement() {
+        let mut cfg = PrivacyConfig::default();
+
+        assert!(set_password(&mut cfg, None, "short", "Q?", "answer").is_err());
+        assert!(set_password(&mut cfg, None, "longenough", "  ", "answer").is_err());
+        assert!(set_password(&mut cfg, None, "longenough", "Q?", "a").is_err());
+
+        set_password(&mut cfg, None, "hunter2secret", "Pet name?", "rex").unwrap();
+        assert!(has_password(&cfg));
+        assert!(has_security_question(&cfg));
+        assert_eq!(cfg.security_question, "Pet name?");
+        // Only the hash is kept, never the password itself.
+        assert!(!cfg.password_hash.contains("hunter2secret"));
+
+        // Replacing it requires the current password.
+        assert!(set_password(&mut cfg, None, "anothersecret", "Q?", "rex").is_err());
+        assert!(set_password(&mut cfg, Some("wrong"), "anothersecret", "Q?", "rex").is_err());
+        assert!(set_password(&mut cfg, Some("hunter2secret"), "anothersecret", "Q?", "rex").is_ok());
+    }
+
+    #[test]
+    fn verify_password_accepts_only_the_exact_password() {
+        let cfg = configured();
+
+        assert!(verify_password(&cfg, "hunter2secret").is_ok());
+        assert!(verify_password(&cfg, "HUNTER2SECRET").is_err());
+        assert!(verify_password(&cfg, "").is_err());
+    }
+
+    #[test]
+    fn content_round_trips_and_uses_a_fresh_nonce_each_time() {
+        let cfg = configured();
+
+        let first = encrypt_content(&cfg, "the secret").unwrap();
+        let second = encrypt_content(&cfg, "the secret").unwrap();
+
+        assert_ne!(first, second, "each encryption must use a new nonce");
+        assert!(first.starts_with("v1:"));
+        assert_eq!(decrypt_content(&cfg, "hunter2secret", &first).unwrap(), "the secret");
+        assert_eq!(decrypt_content(&cfg, "hunter2secret", &second).unwrap(), "the secret");
+        assert!(decrypt_content(&cfg, "wrong", &first).is_err());
+    }
+
+    #[test]
+    fn decrypt_rejects_a_malformed_or_tampered_payload() {
+        let cfg = configured();
+        let good = encrypt_content(&cfg, "the secret").unwrap();
+
+        assert!(decrypt_content(&cfg, "hunter2secret", "v2:aa:bb").is_err());
+        assert!(decrypt_content(&cfg, "hunter2secret", "v1::").is_err());
+        assert!(decrypt_content(&cfg, "hunter2secret", "nonsense").is_err());
+
+        // Flip one ciphertext bit: AES-GCM has to fail authentication.
+        let parts: Vec<&str> = good.splitn(3, ':').collect();
+        let mut raw = B64.decode(parts[2]).unwrap();
+        raw[0] ^= 0x01;
+        let tampered = format!("v1:{}:{}", parts[1], B64.encode(&raw));
+
+        assert!(decrypt_content(&cfg, "hunter2secret", &tampered).is_err());
+    }
+}
+
 pub fn verify_password(cfg: &PrivacyConfig, password: &str) -> Result<(), String> {
     if !has_password(cfg) {
         return Err("请先在设置中配置隐私密码".to_string());

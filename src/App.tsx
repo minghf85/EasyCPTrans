@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { writeFiles, writeImage, writeText } from "tauri-plugin-clipboard-x-api";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -24,21 +24,41 @@ import {
 } from "lucide-react";
 import "./App.css";
 
-import { ClipboardCard } from "./components/ClipboardCard";
+import { ClipboardCard, type CardActions } from "./components/ClipboardCard";
 import { EmptyState } from "./components/EmptyState";
 import { ErrorBanner } from "./components/ErrorBanner";
+import { ImageLightbox } from "./components/ImageLightbox";
 import { MemoryChip } from "./components/MemoryChip";
 import { OcrResultModal } from "./components/OcrResultModal";
 import { PasswordPromptModal } from "./components/PasswordPromptModal";
+import { CardContextMenu } from "./components/CardContextMenu";
+import { MatchPanel, MATCH_DRAG_MIME, writeMatchDragData } from "./components/RegexMatchStack";
 import { QuickTextEditorPage } from "./components/QuickTextEditorPage";
 import { SettingsModal } from "./components/SettingsModal";
 import type { SettingsModalHandle } from "./components/SettingsModal";
 import { TagManagementPage } from "./components/TagManagementPage";
+import {
+  focusRing,
+  iconButton,
+  iconButtonActive,
+  input,
+  navBar,
+  surface,
+  surfaceInteractive,
+  transition,
+  tray,
+} from "./components/ui";
 import { resetClipboardStack, useClipboardWatcher, setInjectedOverrideSig } from "./hooks/useClipboardWatcher";
 import { useHistory } from "./hooks/useHistory";
 import { api } from "./lib/api";
 import { fetchImageDataUrl } from "./lib/imageCache";
 import { normalizeLocale, tr, type Locale } from "./lib/i18n";
+import { ensureStagedDropPath, stagedDropPath } from "./lib/dropStage";
+import { quickSlotIndex } from "./lib/cardInteraction";
+import { shouldHideOnBlur } from "./lib/windowFocus";
+import { escapeTarget, isEditingField, shouldHandleCardShortcut } from "./lib/interactionRules";
+import type { DragChipBitmap } from "./lib/dragChip";
+import type { TagMatchGroup } from "./lib/tagMatches";
 import {
   aggregateTags,
   applyFilters,
@@ -59,6 +79,8 @@ const DEFAULT_ITEM_PRIVATE_SHORTCUT = "M";
 const DEFAULT_ITEM_PIN_SHORTCUT = "P";
 const DEFAULT_ITEM_DELETE_SHORTCUT = "Delete";
 const DEFAULT_ITEM_OCR_SHORTCUT = "O";
+/** Enlarges the selected image. Only images respond to it. */
+const DEFAULT_ITEM_ZOOM_SHORTCUT = "Z";
 const DEFAULT_TAG_COLOR = "#0f6cbd";
 const SYSTEM_TAGS: Array<ManagedTag & { key: ActiveView }> = [
   { id: "sys-text", name: "Text", common: true, color: "#0078d4", system: true, key: "text" },
@@ -69,7 +91,6 @@ const SYSTEM_TAGS: Array<ManagedTag & { key: ActiveView }> = [
 const FUNCTIONAL_TAGS: ManagedTag[] = [
   { id: "sys-word", name: "Word", common: true, color: "#0067c0", system: true },
   { id: "sys-private", name: "Private", common: true, color: "#a4262c", system: true },
-  { id: "sys-command", name: "Command", common: false, color: "#107c10", system: true },
 ];
 const LEGACY_SYSTEM_TAG_IDS = new Set(["sys-url", "sys-code"]);
 const LEGACY_SYSTEM_TAG_NAMES = new Set(["important", "links", "code"]);
@@ -81,7 +102,9 @@ function deviceTagId(name: string) {
 }
 
 function isReservedFunctionalTagName(name: string) {
-  return ["text", "image", "file", "word", "private", "privacy", "pinned", "command"].includes(name.trim().toLowerCase());
+  return ["text", "image", "file", "word", "private", "privacy", "pinned"].includes(
+    name.trim().toLowerCase(),
+  );
 }
 
 function isDeviceSystemTag(tag: ManagedTag) {
@@ -102,12 +125,19 @@ function sanitizeManagedTags(tags: ManagedTag[]) {
       continue;
     }
 
+    // Rule fields are carried through, trimmed: this builder runs on every tag
+    // save, so dropping them here would wipe every regex rule on an unrelated
+    // color or pin change.
+    const pattern = tag.pattern?.trim() || null;
     let next: ManagedTag = {
       id: tag.id,
       name: trimmedName,
       common: Boolean(tag.common),
       color: tag.color?.trim() || DEFAULT_TAG_COLOR,
       system: Boolean(tag.system),
+      pattern,
+      ignoreCase: Boolean(pattern) && Boolean(tag.ignoreCase),
+      extract: Boolean(pattern) && Boolean(tag.extract),
     };
 
     if (lowerId === "sys-text" || lowerName === "text") {
@@ -122,8 +152,6 @@ function sanitizeManagedTags(tags: ManagedTag[]) {
       next = { ...next, id: "sys-word", name: "Word", system: true };
     } else if (lowerId === "sys-private" || lowerName === "private" || lowerName === "privacy") {
       next = { ...next, id: "sys-private", name: "Private", system: true };
-    } else if (lowerId === "sys-command" || lowerName === "command" || lowerName === "commands") {
-      next = { ...next, id: "sys-command", name: "Command", system: true };
     } else if (lowerId.startsWith("sys-device-")) {
       next = { ...next, system: true };
     } else if (next.system) {
@@ -182,7 +210,7 @@ function MainApp() {
   const suppressBlurHideUntilRef = useRef(0);
   const blurHideTimerRef = useRef<number | null>(null);
   const edgeInteractingRef = useRef(false);
-  const pendingSelectionRef = useRef<{ page: number; row: number; edge: "start" | "end" } | null>(null);
+  const pendingSelectionRef = useRef<{ page: number; at: "first" | "last" } | null>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -199,11 +227,17 @@ function MainApp() {
   const [autoPaste, setAutoPaste] = useState(true);
   const [keepWindowOpen, setKeepWindowOpen] = useState(false);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  // Read inside the blur timer, which outlives the render that scheduled it.
+  const alwaysOnTopRef = useRef(alwaysOnTop);
+  alwaysOnTopRef.current = alwaysOnTop;
+  /** Whether the initial config read has finished; see the always-on-top effect. */
+  const [configReady, setConfigReady] = useState(false);
   const [itemTagShortcut, setItemTagShortcut] = useState(DEFAULT_ITEM_TAG_SHORTCUT);
   const [itemPrivateShortcut, setItemPrivateShortcut] = useState(DEFAULT_ITEM_PRIVATE_SHORTCUT);
   const [itemPinShortcut, setItemPinShortcut] = useState(DEFAULT_ITEM_PIN_SHORTCUT);
   const [itemDeleteShortcut, setItemDeleteShortcut] = useState(DEFAULT_ITEM_DELETE_SHORTCUT);
   const [itemOcrShortcut, setItemOcrShortcut] = useState(DEFAULT_ITEM_OCR_SHORTCUT);
+  const [itemZoomShortcut, setItemZoomShortcut] = useState(DEFAULT_ITEM_ZOOM_SHORTCUT);
   const [locale, setLocale] = useState<Locale>("zh-CN");
   const [pageSize, setPageSize] = useState(50);
   const [historyLimit, setHistoryLimit] = useState(5000);
@@ -216,12 +250,16 @@ function MainApp() {
   const [managedTags, setManagedTags] = useState<ManagedTag[]>([]);
   const [tagManageBusy, setTagManageBusy] = useState(false);
   const [tagSelectorOpen, setTagSelectorOpen] = useState(false);
-  const [quickTagItemId, setQuickTagItemId] = useState<number | null>(null);
+  const [cardMenu, setCardMenu] = useState<{ itemId: number; x: number; y: number } | null>(null);
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [queuedIds, setQueuedIds] = useState<number[]>([]);
-  const [cardRows, setCardRows] = useState(1);
-  const [windowLayoutTick, setWindowLayoutTick] = useState(0);
+  const [lightbox, setLightbox] = useState<{ item: HistoryItem; src: string } | null>(null);
+  const [matchPanel, setMatchPanel] = useState<{ item: HistoryItem; group: TagMatchGroup } | null>(null);
+  // True while a match row is in flight, so the strip only lights up for that
+  // drag and not for unrelated ones (file drops from other apps, text selections).
+  const [matchDragging, setMatchDragging] = useState(false);
+  const [stripDropActive, setStripDropActive] = useState(false);
   const [privacyAction, setPrivacyAction] = useState<{ id: number } | null>(null);
   const [privacyBusy, setPrivacyBusy] = useState(false);
   const [privacyError, setPrivacyError] = useState<string | null>(null);
@@ -257,6 +295,7 @@ function MainApp() {
         const nextItemPinShortcut = normalizeShortcutValue(cfg.itemPinShortcut, DEFAULT_ITEM_PIN_SHORTCUT);
         const nextItemDeleteShortcut = normalizeShortcutValue(cfg.itemDeleteShortcut, DEFAULT_ITEM_DELETE_SHORTCUT);
         const nextItemOcrShortcut = normalizeShortcutValue(cfg.itemOcrShortcut, DEFAULT_ITEM_OCR_SHORTCUT);
+        const nextItemZoomShortcut = normalizeShortcutValue(cfg.itemZoomShortcut, DEFAULT_ITEM_ZOOM_SHORTCUT);
         setLocale(normalizeLocale(cfg.locale));
         if (
           nextShortcut !== (cfg.shortcut ?? "") ||
@@ -267,7 +306,9 @@ function MainApp() {
           nextItemTagShortcut !== (cfg.itemTagShortcut ?? "") ||
           nextItemPrivateShortcut !== (cfg.itemPrivateShortcut ?? "") ||
           nextItemPinShortcut !== (cfg.itemPinShortcut ?? "") ||
-          nextItemDeleteShortcut !== (cfg.itemDeleteShortcut ?? "")
+          nextItemDeleteShortcut !== (cfg.itemDeleteShortcut ?? "") ||
+          nextItemOcrShortcut !== (cfg.itemOcrShortcut ?? "") ||
+          nextItemZoomShortcut !== (cfg.itemZoomShortcut ?? "")
         ) {
           void api.setConfig({
             shortcut: nextShortcut,
@@ -280,6 +321,7 @@ function MainApp() {
             itemPinShortcut: nextItemPinShortcut,
             itemDeleteShortcut: nextItemDeleteShortcut,
             itemOcrShortcut: nextItemOcrShortcut,
+            itemZoomShortcut: nextItemZoomShortcut,
           }).catch(console.error);
         }
         setItemTagShortcut(normalizeLocalShortcut(nextItemTagShortcut));
@@ -287,6 +329,7 @@ function MainApp() {
         setItemPinShortcut(normalizeLocalShortcut(nextItemPinShortcut));
         setItemDeleteShortcut(normalizeLocalShortcut(nextItemDeleteShortcut));
         setItemOcrShortcut(normalizeLocalShortcut(nextItemOcrShortcut));
+        setItemZoomShortcut(normalizeLocalShortcut(nextItemZoomShortcut));
         if (typeof cfg.autoPaste === "boolean") setAutoPaste(cfg.autoPaste);
         if (typeof cfg.keepWindowOpen === "boolean") setKeepWindowOpen(cfg.keepWindowOpen);
         if (typeof cfg.alwaysOnTop === "boolean") setAlwaysOnTop(cfg.alwaysOnTop);
@@ -303,7 +346,8 @@ function MainApp() {
           }
         }
       })
-      .catch((e) => console.error(e));
+      .catch((e) => console.error(e))
+      .finally(() => setConfigReady(true));
   }, []);
 
   useEffect(() => {
@@ -318,10 +362,35 @@ function MainApp() {
   }, [errorMsg]);
 
   useEffect(() => {
-    getCurrentWindow().setAlwaysOnTop(alwaysOnTop).catch((err) => {
-      setErrorMsg("Set always-on-top failed: " + String(err));
-    });
-  }, [alwaysOnTop]);
+    // The window is created with the saved value already applied, so pushing the
+    // front-end's initial `false` here would briefly undo a pin set before the
+    // last exit — and undo it for good if the config read failed.
+    if (!configReady) return;
+    const appWindow = getCurrentWindow();
+    appWindow
+      .setAlwaysOnTop(alwaysOnTop)
+      // A failed read-back must not be reported as a failed write, so it falls
+      // back to the value that was just applied.
+      .then(() => appWindow.isAlwaysOnTop().catch(() => alwaysOnTop))
+      .then((actual) => {
+        // The button reports the window, not the intent: if the two disagree,
+        // the window wins so the pin never claims a state it does not have.
+        if (actual !== alwaysOnTop) setAlwaysOnTop(actual);
+      })
+      .catch((err) => {
+        setErrorMsg("Set always-on-top failed: " + String(err));
+      });
+  }, [alwaysOnTop, configReady]);
+
+  useEffect(() => {
+    // One authoritative read once the config has landed, which is what recovers
+    // the state when the config read itself failed.
+    if (!configReady) return;
+    void getCurrentWindow()
+      .isAlwaysOnTop()
+      .then((actual) => setAlwaysOnTop(actual))
+      .catch(() => {});
+  }, [configReady]);
 
   useEffect(() => {
     setPage(0);
@@ -516,17 +585,18 @@ function MainApp() {
       if (!node) return () => {};
       const onWheel = (event: WheelEvent) => {
         const target = event.target as HTMLElement | null;
-        const body = target?.closest(".eacptrans-card-body") as HTMLElement | null;
-        if (body && body.scrollHeight > body.clientHeight) return;
-        const meta = target?.closest(".eacptrans-meta-strip") as HTMLElement | null;
-        if (meta && meta.scrollWidth > meta.clientWidth) return;
-        const menu = target?.closest(".eacptrans-card-menu") as HTMLElement | null;
-        if (menu && menu.scrollHeight > menu.clientHeight) return;
-        const tags = target?.closest(".eacptrans-tags-wrap") as HTMLElement | null;
-        if (tags && tags.scrollWidth > tags.clientWidth) return;
-
         const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
         if (delta === 0) return;
+
+        // A nested scroller that can still consume this wheel keeps the event;
+        // the strip only takes over once the innermost scroller is at its end.
+        // Card bodies, menus and match lists all opt in via `.eacp-scroll`.
+        const nested = target?.closest(".eacp-scroll, .eacp-scroll-none") as HTMLElement | null;
+        if (nested && nested !== node) {
+          if (nested.scrollHeight > nested.clientHeight) return;
+          if (nested.scrollWidth > nested.clientWidth) return;
+        }
+
         event.preventDefault();
         node.scrollLeft += delta;
       };
@@ -543,32 +613,6 @@ function MainApp() {
   }, [activeView, currentPageItems.length]);
 
   useEffect(() => {
-    const node = cardStripRef.current;
-    if (!node || activeView === "settings" || activeView === "tag-manager") return;
-
-    const CARD_HEIGHT = 220;
-    const GAP = 12;
-    const VERTICAL_PADDING = 9;
-    const SCROLLBAR_GUTTER = 14;
-    const updateRows = () => {
-      const availableHeight = Math.max(
-        0,
-        node.clientHeight - VERTICAL_PADDING - SCROLLBAR_GUTTER,
-      );
-      const nextRows = Math.max(
-        1,
-        Math.floor((availableHeight + GAP) / (CARD_HEIGHT + GAP)),
-      );
-      setCardRows((prev) => (prev === nextRows ? prev : nextRows));
-    };
-
-    updateRows();
-    const observer = new ResizeObserver(updateRows);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [activeView, windowLayoutTick]);
-
-  useEffect(() => {
     if (page >= totalPages) setPage(Math.max(0, totalPages - 1));
   }, [page, totalPages]);
 
@@ -580,13 +624,8 @@ function MainApp() {
     }
     const pending = pendingSelectionRef.current;
     if (pending && pending.page === page) {
-      const rows = Math.max(1, cardRows);
       const total = currentPageItems.length;
-      const totalColumns = Math.ceil(total / rows);
-      const targetColumn = pending.edge === "start" ? 0 : Math.max(0, totalColumns - 1);
-      const columnStart = targetColumn * rows;
-      const columnLength = Math.min(rows, Math.max(0, total - columnStart));
-      const targetIndex = columnStart + Math.max(0, Math.min(pending.row, Math.max(0, columnLength - 1)));
+      const targetIndex = pending.at === "first" ? 0 : total - 1;
       const targetItem = currentPageItems[targetIndex] ?? currentPageItems[0];
       pendingSelectionRef.current = null;
       setSelectedId(targetItem.id);
@@ -602,7 +641,7 @@ function MainApp() {
     if (!currentPageItems.some((item) => item.id === selectedId)) {
       setSelectedId(currentPageItems[0].id);
     }
-  }, [activeView, currentPageItems, selectedId, page, cardRows]);
+  }, [activeView, currentPageItems, selectedId, page]);
 
   useEffect(() => {
     const ids = new Set(sourceHistory.map((item) => item.id));
@@ -615,7 +654,7 @@ function MainApp() {
     node.scrollBy({ left: direction === "left" ? -140 : 140, behavior: "smooth" });
   };
 
-  const handlePageChange = (nextPage: number, pendingSelection?: { row: number; edge: "start" | "end" }) => {
+  const handlePageChange = (nextPage: number, pendingSelection?: { at: "first" | "last" }) => {
     const clamped = Math.max(0, Math.min(totalPages - 1, nextPage));
     pendingSelectionRef.current = pendingSelection ? { page: clamped, ...pendingSelection } : null;
     setPage(clamped);
@@ -629,64 +668,29 @@ function MainApp() {
   };
 
   const navigateGridSelectionRef = useRef<(direction: "left" | "right" | "up" | "down") => void>(() => {});
+  /**
+   * The strip is a single row of cards, so every direction moves one card along
+   * it: left/up step back, right/down step forward, crossing page boundaries at
+   * either end.
+   */
   const navigateGridSelection = (direction: "left" | "right" | "up" | "down") => {
     if (currentPageItems.length === 0) return;
 
     const currentIndex = currentPageItems.findIndex((item) => item.id === selectedId);
     const safeIndex = currentIndex >= 0 ? currentIndex : 0;
-    const rows = Math.max(1, cardRows);
     const total = currentPageItems.length;
-    const currentColumn = Math.floor(safeIndex / rows);
-    const currentRow = safeIndex % rows;
-    const totalColumns = Math.ceil(total / rows);
+    const back = direction === "left" || direction === "up";
 
-    const getColumnLength = (column: number) => {
-      if (column < 0 || column >= totalColumns) return 0;
-      return Math.min(rows, Math.max(0, total - column * rows));
-    };
-
-    const getIndex = (column: number, row: number) => {
-      const columnLength = getColumnLength(column);
-      if (columnLength <= 0) return safeIndex;
-      const nextRow = Math.max(0, Math.min(row, columnLength - 1));
-      return column * rows + nextRow;
-    };
-
-    let nextIndex = safeIndex;
-    if (direction === "up") {
-      nextIndex = getIndex(currentColumn, currentRow - 1);
-    } else if (direction === "down") {
-      nextIndex = getIndex(currentColumn, currentRow + 1);
-    } else if (direction === "left") {
-      if (currentColumn === 0 && page > 0) {
-        handlePageChange(page - 1, { row: currentRow, edge: "end" });
-        return;
-      }
-      nextIndex = getIndex(currentColumn - 1, currentRow);
-    } else if (direction === "right") {
-      if (currentColumn >= totalColumns - 1 && page < totalPages - 1) {
-        handlePageChange(page + 1, { row: currentRow, edge: "start" });
-        return;
-      }
-      nextIndex = getIndex(currentColumn + 1, currentRow);
+    if (back && safeIndex === 0) {
+      if (page > 0) handlePageChange(page - 1, { at: "last" });
+      return;
     }
-
-    if (direction === "left" && nextIndex === safeIndex && safeIndex === 0 && page > 0) {
-      handlePageChange(page - 1, { row: currentRow, edge: "end" });
+    if (!back && safeIndex === total - 1) {
+      if (page < totalPages - 1) handlePageChange(page + 1, { at: "first" });
       return;
     }
 
-    if (
-      direction === "right" &&
-      nextIndex === safeIndex &&
-      safeIndex === currentPageItems.length - 1 &&
-      page < totalPages - 1
-    ) {
-      handlePageChange(page + 1, { row: currentRow, edge: "start" });
-      return;
-    }
-
-    const next = currentPageItems[Math.max(0, Math.min(total - 1, nextIndex))];
+    const next = currentPageItems[Math.max(0, Math.min(total - 1, safeIndex + (back ? -1 : 1)))];
     if (!next) return;
     setSelectedId(next.id);
     document.getElementById(`history-item-${next.id}`)?.scrollIntoView({
@@ -757,7 +761,7 @@ function MainApp() {
     if (item.contentType === "image") {
       const dataUrl =
         item.content || (await fetchImageDataUrl(item.id, api.getImageContent));
-      await writeImageDataUrl(dataUrl);
+      await writeImageDataUrl(dataUrl, item.id);
       const width = "metadata" in item ? item.metadata.width?.[0] : null;
       const height = "metadata" in item ? item.metadata.height?.[0] : null;
       setInjectedOverrideSig(width && height ? `img_${width}x${height}` : dataUrl);
@@ -773,27 +777,34 @@ function MainApp() {
     }
   };
 
-  const applyWindowHideForPaste = async () => {
-    await getCurrentWindow().hide().catch(() => {});
-    window.setTimeout(async () => {
-      try {
-        await api.simulatePaste();
-      } catch (err) {
-        setErrorMsg("Paste simulation error: " + String(err));
-      }
-    }, 90);
+  /**
+   * Hands the clipboard contents to the application the panel was opened from.
+   *
+   * A pinned panel stays on screen, so it cannot use hiding to give focus back;
+   * the backend moves focus to the remembered window instead. Either way the
+   * keystroke is only sent once the panel is out of the foreground, and the
+   * result says whether that actually happened — the old code hid the window and
+   * slept for a fixed 90ms, which silently pasted into the wrong place whenever
+   * the handover took longer than that.
+   */
+  const pasteIntoFocusedWindow = async (options?: { keepPanelVisible?: boolean }) => {
+    const outcome = await api.pasteToPreviousWindow(!options?.keepPanelVisible);
+    if (!outcome.focusMoved) {
+      setErrorMsg(tr(locale, "pasteNoTarget"));
+    }
   };
 
-  const pasteHistoryItem = async (item: HistoryItem, options?: { plainText?: boolean; hideWindow?: boolean }) => {
+  const pasteHistoryItem = async (
+    item: HistoryItem,
+    options?: { plainText?: boolean; keepPanelVisible?: boolean },
+  ) => {
     await resetClipboardStack();
     await writeItemToClipboard(item, options);
     setCopiedId(item.id);
     window.setTimeout(() => setCopiedId(null), 1600);
     setSelectedId(item.id);
     void api.markUsed(item.id).catch(console.error);
-    if (options?.hideWindow !== false) {
-      await applyWindowHideForPaste();
-    }
+    await pasteIntoFocusedWindow({ keepPanelVisible: options?.keepPanelVisible });
   };
 
   const handleCopy = async (
@@ -813,20 +824,16 @@ function MainApp() {
         void api.markUsed(item.id).catch(console.error);
       }
 
-      let windowHidden = false;
-      if (!keepWindowOpen && !alwaysOnTop) {
+      // Copy only: get out of the way, unless the panel is pinned or the user
+      // asked for it to stay.
+      if (!keepWindowOpen && !autoPaste && !alwaysOnTop) {
         await getCurrentWindow().hide();
-        windowHidden = true;
       }
 
-      if (autoPaste && windowHidden) {
-        window.setTimeout(async () => {
-          try {
-            await api.simulatePaste();
-          } catch (err) {
-            setErrorMsg("Paste simulation error: " + String(err));
-          }
-        }, 120);
+      // Copy and paste in one gesture. A pinned panel stays put and gets its
+      // focus restored instead of being hidden.
+      if (autoPaste && !keepWindowOpen) {
+        await pasteIntoFocusedWindow({ keepPanelVisible: alwaysOnTop });
       }
     } catch (err) {
       setErrorMsg("Copy error: " + String(err));
@@ -835,10 +842,152 @@ function MainApp() {
 
   const handlePaste = async (item: HistoryItem) => {
     try {
-      await pasteHistoryItem(item, { hideWindow: !alwaysOnTop });
+      await pasteHistoryItem(item, { keepPanelVisible: alwaysOnTop });
     } catch (err) {
       setErrorMsg("Paste error: " + String(err));
     }
+  };
+
+  const handleOpenImage = (item: HistoryItem, src: string) => {
+    setLightbox({ item, src });
+  };
+
+  /**
+   * Enlarges the selected image from the keyboard.
+   *
+   * The card used to carry a hover button for this; the key replaced it, so this
+   * is now the only way in and it has to fetch the pixels for an image that has
+   * not been scrolled into view yet.
+   */
+  const handleZoomSelected = async (item: HistoryItem) => {
+    if (item.contentType !== "image" || item.isPrivate) return;
+    try {
+      const src = item.content || (await api.getImageContent(item.id));
+      if (!src) throw new Error("Image content unavailable");
+      setLightbox({ item, src });
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
+  };
+
+  /**
+   * Hands a card to the native Windows drag loop so it can be dropped into any
+   * other application. The call blocks in Rust until the drop resolves, so the
+   * panel is told not to hide itself on blur for the duration.
+   *
+   * `preview` travels along so OLE draws the card's own chip under the cursor
+   * instead of its generic feedback.
+   */
+  const handleCardDragOut = async (item: HistoryItem, preview: DragChipBitmap | null) => {
+    if (item.isPrivate) {
+      setErrorMsg(tr(locale, "dragOutPrivate"));
+      return;
+    }
+
+    const chip = preview ? { preview } : {};
+    let outcome = "none";
+    markTransientWindowInteraction(20000);
+    try {
+      if (item.contentType === "file") {
+        const paths = item.content
+          .split("\n")
+          .map((path) => path.trim())
+          .filter(Boolean);
+        if (paths.length === 0) throw new Error("No file paths on this item");
+        outcome = await api.startDragOut({ files: paths, ...chip });
+      } else if (item.contentType === "image") {
+        // The temp file was staged when the image came into view, so this is a
+        // map lookup; a drag that beat the prewarm waits for it instead. Either
+        // way there is no data-URL round trip in front of the drag loop.
+        const path = stagedDropPath(item) ?? (await ensureStagedDropPath(item));
+        outcome = await api.startDragOut({ files: [path], ...chip });
+      } else {
+        outcome = await api.startDragOut({ text: item.content, ...chip });
+      }
+    } catch (err) {
+      setErrorMsg(tr(locale, "dragOutFailed") + String(err));
+    } finally {
+      markTransientWindowInteraction(400);
+    }
+
+    // A drag that lands nowhere used to be silent, which looks exactly like a
+    // drag that never started. Saying so is the difference between a bug report
+    // and a diagnosis.
+    if (outcome === "none") {
+      setErrorMsg(tr(locale, "dragOutNoTarget"));
+    }
+  };
+
+  const handleMatchDragStart = (value: string, event: ReactDragEvent) => {
+    writeMatchDragData(value, event);
+    setMatchDragging(true);
+  };
+
+  const handleMatchDragEnd = () => {
+    setMatchDragging(false);
+    setStripDropActive(false);
+  };
+
+  /** Materializes a value — a dragged match, or a click in the overflow panel — as its own card. */
+  const handleCreateCardFromText = async (value: string) => {
+    const text = value.trim();
+    if (!text) return;
+    try {
+      const id = await api.createStackTextItem(text);
+      setMatchPanel(null);
+      setSelectedId(id);
+      await reloadHistory();
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
+  };
+
+  const handleStripDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!matchDragging) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    if (!stripDropActive) setStripDropActive(true);
+  };
+
+  // A drag that ends outside the window — or in another application — never
+  // fires `dragend`, which used to leave the strip lit up for every later drag.
+  useEffect(() => {
+    if (!matchDragging) return;
+    const clear = () => {
+      setMatchDragging(false);
+      setStripDropActive(false);
+    };
+    window.addEventListener("dragend", clear);
+    window.addEventListener("drop", clear);
+    window.addEventListener("blur", clear);
+    const timer = window.setTimeout(clear, 30_000);
+    return () => {
+      window.removeEventListener("dragend", clear);
+      window.removeEventListener("drop", clear);
+      window.removeEventListener("blur", clear);
+      window.clearTimeout(timer);
+    };
+  }, [matchDragging]);
+
+  const handleStripDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+    const next = event.relatedTarget as Node | null;
+    if (next && event.currentTarget.contains(next)) return;
+    setStripDropActive(false);
+  };
+
+  const handleStripDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    const dragging = matchDragging;
+    setStripDropActive(false);
+    setMatchDragging(false);
+    if (!dragging) return;
+
+    const value =
+      event.dataTransfer.getData(MATCH_DRAG_MIME) ||
+      event.dataTransfer.getData("text/plain");
+    if (!value.trim()) return;
+
+    event.preventDefault();
+    void handleCreateCardFromText(value);
   };
 
   const handleCopyFromUI = (
@@ -887,9 +1036,7 @@ function MainApp() {
       setCopiedId(item.id);
       window.setTimeout(() => setCopiedId(null), 1600);
       void api.markUsed(item.id).catch(console.error);
-      if (!alwaysOnTop) {
-        await applyWindowHideForPaste();
-      }
+      await pasteIntoFocusedWindow({ keepPanelVisible: alwaysOnTop });
     } catch (err) {
       setErrorMsg("Paste error: " + String(err));
     }
@@ -960,9 +1107,8 @@ function MainApp() {
     itemPinShortcut: string;
     itemDeleteShortcut: string;
     itemOcrShortcut: string;
+    itemZoomShortcut: string;
     autoPaste: boolean;
-    keepWindowOpen: boolean;
-    alwaysOnTop: boolean;
     pageSize: number;
     historyLimit: number;
     webdavUrl: string;
@@ -980,13 +1126,15 @@ function MainApp() {
   }) => {
     setLocale(settings.locale);
     setAutoPaste(settings.autoPaste);
-    setKeepWindowOpen(settings.keepWindowOpen);
-    setAlwaysOnTop(settings.alwaysOnTop);
+    // `alwaysOnTop` and `keepWindowOpen` are not taken from the settings payload:
+    // the modal used to echo back the value it read on mount, which silently
+    // undid a pin toggled while the settings page was open.
     setItemTagShortcut(normalizeLocalShortcut(settings.itemTagShortcut));
     setItemPrivateShortcut(normalizeLocalShortcut(settings.itemPrivateShortcut));
     setItemPinShortcut(normalizeLocalShortcut(settings.itemPinShortcut));
     setItemDeleteShortcut(normalizeLocalShortcut(settings.itemDeleteShortcut));
     setItemOcrShortcut(normalizeLocalShortcut(settings.itemOcrShortcut));
+    setItemZoomShortcut(normalizeLocalShortcut(settings.itemZoomShortcut));
     setPageSize(settings.pageSize);
     setHistoryLimit(settings.historyLimit);
     setShowMemoryUsage(settings.showMemoryUsage);
@@ -1030,14 +1178,91 @@ function MainApp() {
     setPrivacyAction({ id });
   };
 
-  const openQuickTagPicker = (item: HistoryItem) => {
-    setSelectedId(item.id);
-    setQuickTagItemId((current) => (current === item.id ? null : item.id));
-  };
+  /**
+   * The one open actions menu.
+   *
+   * A single slot rather than per-card state: the menu used to be owned by the
+   * card that opened it, which meant two cards could be open at once, a closed
+   * one could clear another card's state, and paging away left the request
+   * behind so the menu reappeared on the way back.
+   */
+  /** The menu only exists while its item is on screen, which is what closes it. */
+  const menuItem = useMemo(
+    () => (cardMenu ? currentPageItems.find((entry) => entry.id === cardMenu.itemId) ?? null : null),
+    [cardMenu, currentPageItems],
+  );
 
-  const closeQuickTagPicker = () => {
-    setQuickTagItemId(null);
-  };
+  useEffect(() => {
+    if (cardMenu && !menuItem) setCardMenu(null);
+  }, [cardMenu, menuItem]);
+
+  // Anything modal, or a different page of the app, takes precedence over the menu.
+  useEffect(() => {
+    if (privacyAction || ocrPanel || lightbox || matchPanel) setCardMenu(null);
+  }, [privacyAction, ocrPanel, lightbox, matchPanel]);
+
+  useEffect(() => {
+    if (activeView === "settings" || activeView === "tag-manager") setCardMenu(null);
+  }, [activeView]);
+
+  const closeCardMenu = useCallback(() => setCardMenu(null), []);
+
+  const openCardMenu = useCallback((item: HistoryItem, anchor: { x: number; y: number }) => {
+    // Right-clicking selects, so the menu and the selection never disagree.
+    setSelectedId(item.id);
+    setCardMenu({ itemId: item.id, x: anchor.x, y: anchor.y });
+  }, []);
+
+  /** The keyboard route in, for when the chevron is not there to be clicked. */
+  const openCardMenuForSelected = useCallback(
+    (item: HistoryItem) => {
+      const rect = document.getElementById(`history-item-${item.id}`)?.getBoundingClientRect();
+      openCardMenu(item, {
+        x: rect ? rect.left + 24 : window.innerWidth / 2,
+        y: rect ? rect.top + 48 : window.innerHeight / 2,
+      });
+    },
+    [openCardMenu],
+  );
+
+  // The webview's own menu is suppressed by the card itself (its React handler
+  // runs first), so text fields and the quick-edit page keep the native copy/paste
+  // menu they have always had.
+  useEffect(() => {
+    const onContextMenu = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-card-id]")) return;
+      closeCardMenu();
+    };
+    document.addEventListener("contextmenu", onContextMenu);
+    return () => document.removeEventListener("contextmenu", onContextMenu);
+  }, [closeCardMenu]);
+
+  /**
+   * The card's action surface, behind a stable identity.
+   *
+   * `ClipboardCard` is memoised, so passing the handlers as individual props
+   * would hand every card a fresh prop on every render here and make the
+   * memoisation worthless — fifty cards re-rendering on each keystroke. The
+   * object is created once and its members are refreshed in place: the identity
+   * never changes, and the handlers behind it are never stale.
+   */
+  const cardActions = useMemo(() => ({} as CardActions), []);
+  Object.assign(
+    cardActions,
+    {
+      onPaste: handlePaste,
+      onDisablePrivacy: handleDisablePrivacy,
+      onOcrOpen: handleOcrOpen,
+      onOpenImage: handleOpenImage,
+      onDragOutStart: handleCardDragOut,
+      onMatchDragStart: handleMatchDragStart,
+      onMatchDragEnd: handleMatchDragEnd,
+      onOpenMatchPanel: (target: HistoryItem, group: TagMatchGroup) =>
+        setMatchPanel({ item: target, group }),
+      onContextMenu: openCardMenu,
+    } satisfies CardActions,
+  );
 
   const handlePrivacyConfirm = async (password: string) => {
     if (!privacyAction) return;
@@ -1171,6 +1396,36 @@ function MainApp() {
     }
   };
 
+  /**
+   * Sets (or clears) a tag's auto-tagging rule. Extraction and case-folding are
+   * meaningless without a pattern, so they are normalized away with it.
+   */
+  const handleSetManagedTagPattern = async (
+    tag: string,
+    pattern: string | null,
+    ignoreCase: boolean,
+    extract: boolean,
+  ) => {
+    const cleaned = pattern?.trim() || null;
+    setTagManageBusy(true);
+    try {
+      await saveManagedTags(
+        allKnownTags.map((item) =>
+          item.name === tag
+            ? {
+                ...item,
+                pattern: cleaned,
+                ignoreCase: Boolean(cleaned) && ignoreCase,
+                extract: Boolean(cleaned) && extract,
+              }
+            : item,
+        ),
+      );
+    } finally {
+      setTagManageBusy(false);
+    }
+  };
+
   useEffect(() => {
     void api.syncQueueState(queuedIds).catch((err) => {
       console.error("Sync queue state failed:", err);
@@ -1206,7 +1461,14 @@ function MainApp() {
     const scheduleBlurHide = () => {
       clearBlurTimer();
       blurHideTimerRef.current = window.setTimeout(() => {
-        if (edgeInteractingRef.current || Date.now() < suppressBlurHideUntilRef.current) {
+        if (
+          !shouldHideOnBlur({
+            alwaysOnTop: alwaysOnTopRef.current,
+            edgeInteracting: edgeInteractingRef.current,
+            suppressedUntil: suppressBlurHideUntilRef.current,
+            now: Date.now(),
+          })
+        ) {
           return;
         }
         void appWindow.hide().catch(() => {});
@@ -1214,6 +1476,11 @@ function MainApp() {
     };
     void appWindow.onFocusChanged(({ payload }) => {
       if (!payload) {
+        if (alwaysOnTopRef.current) {
+          // A pinned panel is meant to stay put, so losing focus is not a reason
+          // to disappear — hiding it made the pin look broken.
+          return;
+        }
         if (edgeInteractingRef.current || Date.now() < suppressBlurHideUntilRef.current) {
           console.info("[EasyCPTrans] Ignore blur-hide during transient window interaction.");
           return;
@@ -1227,7 +1494,6 @@ function MainApp() {
     });
     void appWindow.onResized(() => {
       markTransientWindowInteraction(6500);
-      setWindowLayoutTick((value) => value + 1);
     }).then((fn) => {
       unlistenResize = fn;
     });
@@ -1263,12 +1529,11 @@ function MainApp() {
     activeView,
     currentPageItems,
     privacyAction,
-    quickTagItemId,
+    cardMenuOpen: cardMenu !== null,
     searchOpen,
     selectedId,
     queuedIds,
     sourceHistory,
-    cardRows,
     page,
     totalPages,
     alwaysOnTop,
@@ -1277,12 +1542,15 @@ function MainApp() {
     itemPinShortcut,
     itemDeleteShortcut,
     itemOcrShortcut,
+    itemZoomShortcut,
     ocrEnabled,
     ocrPanelOpen: ocrPanel !== null,
+    matchPanelOpen: matchPanel !== null,
+    lightboxOpen: lightbox !== null,
   });
   handlersRef.current = {
-    closeQuickTagPicker,
-    openQuickTagPicker,
+    closeCardMenu,
+    openCardMenuForSelected,
     handleDisablePrivacy,
     handleEnablePrivacy,
     handleTogglePin,
@@ -1290,17 +1558,17 @@ function MainApp() {
     handleCopyFromUI,
     toggleQueuedItem,
     handleOcrOpen,
+    handleZoomSelected,
   };
   keydownStateRef.current = {
     activeView,
     currentPageItems,
     privacyAction,
-    quickTagItemId,
+    cardMenuOpen: cardMenu !== null,
     searchOpen,
     selectedId,
     queuedIds,
     sourceHistory,
-    cardRows,
     page,
     totalPages,
     alwaysOnTop,
@@ -1309,33 +1577,54 @@ function MainApp() {
     itemPinShortcut,
     itemDeleteShortcut,
     itemOcrShortcut,
+    itemZoomShortcut,
     ocrEnabled,
     ocrPanelOpen: ocrPanel !== null,
+    matchPanelOpen: matchPanel !== null,
+    lightboxOpen: lightbox !== null,
   };
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // A handler that has already dealt with this key marks the event, and it
+      // wins: the menu, in particular, runs its own keyboard loop and its
+      // Escape must close the tag form rather than the whole popup.
+      if (event.defaultPrevented) return;
+
       const s = keydownStateRef.current;
       const h = handlersRef.current;
 
       if (event.key === "Escape") {
         event.preventDefault();
-        if (s.privacyAction) return;
-        if (s.ocrPanelOpen) {
-          setOcrPanel(null);
-          return;
+        // Innermost first, per `escapeTarget`. The lightbox is deliberately not
+        // in that list: it closes itself, because it is the only overlay that
+        // also owns other keys.
+        switch (
+          escapeTarget({
+            privacyPrompt: Boolean(s.privacyAction),
+            ocrPanel: s.ocrPanelOpen,
+            matchPanel: s.matchPanelOpen,
+            cardMenu: s.cardMenuOpen,
+            search: s.searchOpen,
+          })
+        ) {
+          case "ocrPanel":
+            setOcrPanel(null);
+            return;
+          case "matchPanel":
+            setMatchPanel(null);
+            return;
+          case "cardMenu":
+            h.closeCardMenu();
+            return;
+          case "search":
+            setSearchOpen(false);
+            setSearch("");
+            setDebouncedSearch("");
+            return;
+          default:
+            return;
         }
-        if (s.quickTagItemId !== null) {
-          h.closeQuickTagPicker();
-          return;
-        }
-        if (s.searchOpen) {
-          setSearchOpen(false);
-          setSearch("");
-          setDebouncedSearch("");
-          return;
-        }
-        return;
       }
 
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
@@ -1344,11 +1633,31 @@ function MainApp() {
         return;
       }
 
-      if (s.activeView === "settings" || s.activeView === "tag-manager" || s.privacyAction) return;
+      // Everything below acts on the strip, so it stands down for a full-page
+      // view, for anything layered above the strip, and while the user is typing.
+      // This is what keeps `Delete` from deleting the card behind the lightbox.
       const target = event.target as HTMLElement | null;
-      if (target) {
-        const tag = target.tagName.toLowerCase();
-        if (tag === "input" || tag === "textarea" || target.isContentEditable) return;
+      if (
+        !shouldHandleCardShortcut({
+          viewOwnsKeyboard: s.activeView === "settings" || s.activeView === "tag-manager",
+          overlayOpen:
+            Boolean(s.privacyAction) || s.ocrPanelOpen || s.matchPanelOpen || s.lightboxOpen,
+          editingField: isEditingField(target),
+        })
+      ) {
+        return;
+      }
+
+      // The menu key and Shift+F10 mean "open the context menu for this item",
+      // the same as a right click.
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+        const selected =
+          s.currentPageItems.find((item) => item.id === s.selectedId) ?? s.currentPageItems[0];
+        if (selected) {
+          event.preventDefault();
+          h.openCardMenuForSelected(selected);
+        }
+        return;
       }
 
       if (
@@ -1375,7 +1684,10 @@ function MainApp() {
         const selected = s.currentPageItems.find((item) => item.id === s.selectedId) ?? s.currentPageItems[0] ?? null;
         if (selected && shortcut === normalizeLocalShortcut(s.itemTagShortcut)) {
           event.preventDefault();
-          h.openQuickTagPicker(selected);
+          // The key that used to open the tag picker now opens the whole menu,
+          // which includes the picker: the chevron is gone, so this is the
+          // keyboard route to every action.
+          h.openCardMenuForSelected(selected);
           return;
         }
         if (selected && shortcut === normalizeLocalShortcut(s.itemPrivateShortcut)) {
@@ -1391,8 +1703,17 @@ function MainApp() {
         }
         if (selected && shortcut === normalizeLocalShortcut(s.itemDeleteShortcut)) {
           event.preventDefault();
-          if (s.quickTagItemId === selected.id) h.closeQuickTagPicker();
           h.handleDelete(selected.id);
+          return;
+        }
+        if (
+          selected &&
+          selected.contentType === "image" &&
+          !selected.isPrivate &&
+          shortcut === normalizeLocalShortcut(s.itemZoomShortcut)
+        ) {
+          event.preventDefault();
+          void h.handleZoomSelected(selected);
           return;
         }
         if (
@@ -1418,17 +1739,16 @@ function MainApp() {
         return;
       }
 
-      if (event.key === " " || event.key === "Tab") {
+      // Space toggles the queue. Tab is left alone so keyboard users can walk
+      // the focusable controls, which the app is full of — and a focused control
+      // keeps Space too, because that is how a button is pressed from a keyboard.
+      if (event.key === " ") {
+        if (target?.closest("button, a, [role='button'], [role='menuitem']")) return;
         event.preventDefault();
         const selected =
           s.currentPageItems.find((item) => item.id === s.selectedId) ?? s.currentPageItems[0];
         if (!selected) return;
         h.toggleQueuedItem(selected.id);
-        if (event.key === "Tab") {
-          const currentIndex = s.currentPageItems.findIndex((item) => item.id === selected.id);
-          const nextIndex = Math.min(s.currentPageItems.length - 1, Math.max(0, currentIndex + 1));
-          setSelectedId(s.currentPageItems[nextIndex].id);
-        }
       }
     };
 
@@ -1484,9 +1804,13 @@ function MainApp() {
   };
 
   return (
-    <div className="eacptrans-shell" ref={shellRef}>
+    <div
+      ref={shellRef}
+      className="relative flex h-screen flex-col overflow-hidden rounded-xl border border-gray-200 bg-slate-50 text-gray-900"
+    >
+      {/* Invisible strips along the frameless window's edges, for dragging it. */}
       <div
-        className="eacptrans-drag-edge eacptrans-drag-edge-top"
+        className="absolute left-3.5 right-3.5 top-0 z-10 h-2 select-none"
         data-tauri-drag-region
         onMouseDown={() => {
           edgeInteractingRef.current = true;
@@ -1495,7 +1819,7 @@ function MainApp() {
         }}
       />
       <div
-        className="eacptrans-drag-edge eacptrans-drag-edge-left"
+        className="absolute bottom-0 left-0 top-0 z-10 w-3 select-none"
         data-tauri-drag-region
         onMouseDown={() => {
           edgeInteractingRef.current = true;
@@ -1504,7 +1828,7 @@ function MainApp() {
         }}
       />
       <div
-        className="eacptrans-drag-edge eacptrans-drag-edge-right"
+        className="absolute bottom-0 right-0 top-0 z-10 w-3 select-none"
         data-tauri-drag-region
         onMouseDown={() => {
           edgeInteractingRef.current = true;
@@ -1513,152 +1837,219 @@ function MainApp() {
         }}
       />
 
-      <section className="eacptrans-toolbar">
-          <button
-            className="eacptrans-icon-btn eacptrans-drag-handle-btn"
-            title={tr(locale, "dragWindow")}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              edgeInteractingRef.current = true;
-              markTransientWindowInteraction(5000);
-              void getCurrentWindow().startDragging().catch(() => {});
-            }}
-          >
-            <GripHorizontal className="h-4 w-4" />
-          </button>
+      <header className={navBar}>
+        <button
+          type="button"
+          className={`h-9 w-9 ${iconButton} cursor-move`}
+          title={tr(locale, "dragWindow")}
+          aria-label={tr(locale, "dragWindow")}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            edgeInteractingRef.current = true;
+            markTransientWindowInteraction(5000);
+            void getCurrentWindow().startDragging().catch(() => {});
+          }}
+        >
+          <GripHorizontal className="h-4 w-4" aria-hidden />
+        </button>
 
+        <button
+          type="button"
+          // The pinned state is one filled shape rather than a tint on top of
+          // the base button: `iconButton` carries its own border and background,
+          // and stacking a second set on top means the winner is whoever comes
+          // later in the stylesheet.
+          className={`h-9 w-9 ${alwaysOnTop ? iconButtonActive : iconButton}`}
+          title={alwaysOnTop ? tr(locale, "unpinWindow") : tr(locale, "pinWindow")}
+          aria-label={alwaysOnTop ? tr(locale, "unpinWindow") : tr(locale, "pinWindow")}
+          aria-pressed={alwaysOnTop}
+          onClick={() => {
+            const next = !alwaysOnTop;
+            setAlwaysOnTop(next);
+            void api.setConfig({ alwaysOnTop: next }).catch((err) => {
+              // The window already follows the new state, so put the button back
+              // rather than leave it claiming a pin that was never saved.
+              setAlwaysOnTop(!next);
+              setErrorMsg("Set always-on-top failed: " + String(err));
+            });
+          }}
+        >
+          <Pin className="h-4 w-4" aria-hidden />
+        </button>
+
+        <div className="flex items-center">
           <button
-            className={`eacptrans-icon-btn ${alwaysOnTop ? "active" : ""}`}
-            title={alwaysOnTop ? tr(locale, "unpinWindow") : tr(locale, "pinWindow")}
+            type="button"
+            className={`h-9 w-9 ${iconButton}`}
+            title={`${tr(locale, "search")} (tag/app/type/date/size)`}
+            aria-label={tr(locale, "search")}
+            aria-expanded={searchOpen}
             onClick={() => {
-              const next = !alwaysOnTop;
-              setAlwaysOnTop(next);
-              void api.setConfig({ alwaysOnTop: next }).catch(console.error);
+              const next = !searchOpen;
+              setSearchOpen(next);
+              if (!next) {
+                setSearch("");
+                setDebouncedSearch("");
+              }
             }}
           >
-            <Pin className="h-4 w-4" />
+            <Search className="h-4 w-4" aria-hidden />
           </button>
-
-          <div className="eacptrans-search-wrap">
-            <button
-              className="eacptrans-search-btn"
-              title={`${tr(locale, "search")} (tag/app/type/date/size)`}
-              onClick={() => {
-                const next = !searchOpen;
-                setSearchOpen(next);
-                if (!next) {
-                  setSearch("");
-                  setDebouncedSearch("");
-                }
-              }}
-            >
-              <Search className="h-4 w-4" />
-            </button>
-            <div className={`eacptrans-search-expand ${searchOpen ? "open" : ""}`}>
-              <input
-                autoFocus={searchOpen}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder='Search... tag:work app:chrome type:text "exact phrase"'
-              />
-            </div>
-          </div>
-
-          <button className="eacptrans-scroll-arrow" onClick={() => handleScrollTabs("left")}>
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-
-          <div className="eacptrans-filter-scroll" id="filter-scroll">
-            {tabList.map(({ key, label, dotClass, icon: Icon }) => {
-              const active = key === "tag-selector" ? tagSelectorOpen : activeView === key;
-              const TabIcon =
-                key === "settings" && settingsSaveState === "saving"
-                  ? RefreshCw
-                  : key === "settings" && settingsSaveState === "saved"
-                    ? CheckSquare
-                    : Icon;
-              const systemConfig = SYSTEM_TAGS.find((tag) => tag.key === key)
-                ? allKnownTags.find((tag) => tag.id === SYSTEM_TAGS.find((entry) => entry.key === key)?.id)
-                : null;
-              return (
-                <Fragment key={key}>
-                  <button
-                    className={`eacptrans-filter-tab ${active ? "active" : ""}`}
-                    style={
-                      key.startsWith("tag:") || systemConfig
-                        ? ({
-                            borderColor: active ? `${systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR}55` : undefined,
-                            background: active ? `${systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR}14` : undefined,
-                            color: active ? systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? undefined : undefined,
-                          } as object)
-                        : undefined
-                    }
-                    onClick={() => onTabClick(key)}
-                  >
-                    <span
-                      className={`eacptrans-tab-dot ${dotClass}`}
-                      style={
-                        key.startsWith("tag:") || systemConfig
-                          ? ({ background: systemConfig?.color ?? allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ?? DEFAULT_TAG_COLOR } as object)
-                          : undefined
-                      }
-                    />
-                    <span>{label}</span>
-                    <TabIcon className={`h-3.5 w-3.5 ${key === "settings" && settingsSaveState === "saving" ? "animate-spin" : ""}`} />
-                  </button>
-                  {key === "tag-selector" && tagSelectorOpen && (
-                    <div className="eacptrans-tag-inline-list">
-                      {selectableTags.length === 0 ? (
-                        <span className="eacptrans-tag-inline-empty">{tr(locale, "noTagsInline")}</span>
-                      ) : (
-                        selectableTags.map((tag) => {
-                          const tagActive = activeTags.includes(tag.name);
-                          return (
-                            <button
-                              key={tag.name}
-                              className={`eacptrans-tag-inline-chip ${tagActive ? "active" : ""}`}
-                              style={{
-                                borderColor: tagActive ? `${tag.color}66` : undefined,
-                                background: tagActive ? `${tag.color}14` : undefined,
-                                color: tagActive ? tag.color : undefined,
-                              }}
-                              onClick={() => toggleTag(tag.name)}
-                            >
-                              {tagActive ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
-                              <span>#{tag.name}</span>
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                  )}
-                </Fragment>
-              );
-            })}
-          </div>
-
-          <button className="eacptrans-scroll-arrow" onClick={() => handleScrollTabs("right")}>
-            <ChevronRight className="h-4 w-4" />
-          </button>
-
-          {showMemoryUsage && (
-            <MemoryChip
-              locale={locale}
-              onOpenSettings={() => {
-                if (activeView !== "settings") setActiveView("settings");
-              }}
+          <div
+            className={`overflow-hidden transition-all duration-200 ease-out ${
+              searchOpen ? "ml-2 w-72 opacity-100" : "w-0 opacity-0"
+            }`}
+          >
+            <input
+              autoFocus={searchOpen}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder='Search… tag:work app:chrome type:text "exact phrase"'
+              className={`h-9 ${input}`}
             />
-          )}
-      </section>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          className={`h-9 w-9 ${iconButton}`}
+          onClick={() => handleScrollTabs("left")}
+          aria-label={tr(locale, "scrollTabsLeft")}
+        >
+          <ChevronLeft className="h-4 w-4" aria-hidden />
+        </button>
+
+        {/* `p-2` paired with `-m-2`: the padding box grows by 8px on every side
+            so the tabs' focus rings — and the underline, which is drawn 8px below
+            the tab — are not clipped by the scroll container. The negative margin
+            keeps the header's height and the tabs' width exactly as they were. */}
+        <div className="eacp-scroll-none -m-2 flex flex-1 items-center gap-1 overflow-x-auto p-2" id="filter-scroll">
+          {tabList.map(({ key, label, icon: Icon }) => {
+            const active = key === "tag-selector" ? tagSelectorOpen : activeView === key;
+            const TabIcon =
+              key === "settings" && settingsSaveState === "saving"
+                ? RefreshCw
+                : key === "settings" && settingsSaveState === "saved"
+                  ? CheckSquare
+                  : Icon;
+            const systemConfig = SYSTEM_TAGS.find((tag) => tag.key === key)
+              ? allKnownTags.find((tag) => tag.id === SYSTEM_TAGS.find((entry) => entry.key === key)?.id)
+              : null;
+            // The dot carries the tag's identity; the surface still uses the
+            // standard active treatment so colour is never the only signal.
+            const tabColor = key.startsWith("tag:")
+              ? systemConfig?.color ??
+                allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ??
+                DEFAULT_TAG_COLOR
+              : null;
+
+            return (
+              <Fragment key={key}>
+                <button
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => onTabClick(key)}
+                  className={`relative inline-flex shrink-0 items-center gap-2 whitespace-nowrap px-3 py-2 text-sm font-medium ${transition} ${focusRing} active:scale-[0.98] active:translate-y-0 ${
+                    active ? "text-blue-700" : "text-gray-500 hover:text-gray-900"
+                  }`}
+                >
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: tabColor ?? (active ? "#1d4ed8" : "#9ca3af") }}
+                    aria-hidden
+                  />
+                  <span>{label}</span>
+                  <TabIcon
+                    className={`h-4 w-4 ${
+                      key === "settings" && settingsSaveState === "saving" ? "animate-spin" : ""
+                    }`}
+                    aria-hidden
+                  />
+                  {/* Drawn 8px below the tab so it lands on the bar's bottom
+                      border instead of floating above it. */}
+                  {active && (
+                    <span
+                      className="absolute -bottom-2 left-2 right-2 h-0.5 rounded-full bg-blue-600"
+                      aria-hidden
+                    />
+                  )}
+                </button>
+
+                {key === "tag-selector" && tagSelectorOpen && (
+                  // A filled well rather than another bordered box: the tags
+                  // inside each carry their own edge, and nesting the two reads
+                  // as a double border.
+                  <div className="eacp-scroll flex shrink-0 items-center gap-2 overflow-x-auto rounded-lg bg-gray-50 px-2 py-1.5">
+                    {selectableTags.length === 0 ? (
+                      <span className="px-1 text-xs text-gray-500">{tr(locale, "noTagsInline")}</span>
+                    ) : (
+                      selectableTags.map((tag) => {
+                        const tagActive = activeTags.includes(tag.name);
+                        return (
+                          <button
+                            key={tag.name}
+                            type="button"
+                            aria-pressed={tagActive}
+                            style={
+                              tagActive
+                                ? {
+                                    borderColor: `${tag.color}66`,
+                                    backgroundColor: `${tag.color}14`,
+                                    color: tag.color,
+                                  }
+                                : undefined
+                            }
+                            className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-medium transition-all duration-200 ease-out active:scale-[0.98] ${focusRing} ${
+                              tagActive
+                                ? ""
+                                : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                            }`}
+                            onClick={() => toggleTag(tag.name)}
+                          >
+                            {tagActive ? (
+                              <CheckSquare className="h-3.5 w-3.5" aria-hidden />
+                            ) : (
+                              <Square className="h-3.5 w-3.5" aria-hidden />
+                            )}
+                            <span>#{tag.name}</span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </Fragment>
+            );
+          })}
+        </div>
+
+        <button
+          type="button"
+          className={`h-9 w-9 ${iconButton}`}
+          onClick={() => handleScrollTabs("right")}
+          aria-label={tr(locale, "scrollTabsRight")}
+        >
+          <ChevronRight className="h-4 w-4" aria-hidden />
+        </button>
+
+        {showMemoryUsage && (
+          <MemoryChip
+            locale={locale}
+            onOpenSettings={() => {
+              if (activeView !== "settings") setActiveView("settings");
+            }}
+          />
+        )}
+      </header>
 
       <ErrorBanner message={errorMsg} onDismiss={() => setErrorMsg(null)} />
 
       <main
-        className={`eacptrans-main ${
+        className={
           activeView === "settings" || activeView === "tag-manager"
-            ? "eacptrans-main-settings"
-            : "eacptrans-main-cards"
-        }`}
+            ? "eacp-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4"
+            : "flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4"
+        }
       >
         {activeView === "settings" ? (
           <SettingsModal ref={settingsModalRef} locale={locale} onSaved={handleSettingsSaved} />
@@ -1672,6 +2063,7 @@ function MainApp() {
             onDelete={handleDeleteManagedTag}
             onToggleCommon={handleToggleManagedTagCommon}
             onSetColor={handleSetManagedTagColor}
+            onSetPattern={handleSetManagedTagPattern}
             locale={locale}
           />
         ) : filtered.length === 0 ? (
@@ -1683,53 +2075,54 @@ function MainApp() {
         ) : (
           <div
             ref={cardStripRef}
-            className="eacptrans-card-strip"
             id="card-scroll"
-            style={{ ["--card-rows" as string]: String(cardRows) }}
+            // The padding is what clears the selected card's `ring-2`: a scroll
+            // container clips at its padding box, so any bleed has to be inside
+            // it. `!bg-blue-50` because the tray's own background would otherwise
+            // win on stylesheet order.
+            className={`${tray} ${transition} ${
+              stripDropActive ? "!bg-blue-50 ring-2 ring-blue-500" : ""
+            }`}
+            onDragOver={handleStripDragOver}
+            onDragLeave={handleStripDragLeave}
+            onDrop={handleStripDrop}
           >
             {page > 0 && (
-              <button className="eacptrans-page-card" onClick={() => handlePageChange(page - 1)}>
-                <Ellipsis className="h-8 w-8" />
-                <span>{tr(locale, "loadPrevious")}</span>
-                <small>
+              <button
+                type="button"
+                onClick={() => handlePageChange(page - 1)}
+                className={`flex h-full w-[260px] shrink-0 flex-col items-center justify-center gap-2 text-gray-500 ${surface} ${surfaceInteractive} active:scale-[0.98] active:translate-y-0 ${focusRing}`}
+              >
+                <Ellipsis className="h-8 w-8" aria-hidden />
+                <span className="text-sm font-medium">{tr(locale, "loadPrevious")}</span>
+                <small className="text-xs text-gray-400">
                   {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, filtered.length)}
                 </small>
               </button>
             )}
+
             {currentPageItems.map((item, itemIndex) => (
-                <ClipboardCard
-                  key={item.id}
-                  item={item}
-                  availableTags={assignableTagNames}
-                  tagColors={tagColorMap}
-                  isSelected={selectedId === item.id}
-                  isCopied={copiedId === item.id}
-                  quickSlot={page === 0 && itemIndex < 10 ? itemIndex + 1 : null}
-                  queueSlot={queueOrderFor(item.id)}
-                  locale={locale}
-                  onCopy={handleCopyFromUI}
-                  onPaste={handlePaste}
-                  onTogglePin={handleTogglePin}
-                  onDelete={handleDelete}
-                  onToggleTag={handleToggleTag}
-                  onCreateTag={handleCreateAndAttachTag}
-                  onEnablePrivacy={handleEnablePrivacy}
-                  onDisablePrivacy={handleDisablePrivacy}
-                  onQuickEdit={handleQuickEdit}
-                  onOcrOpen={handleOcrOpen}
-                  onNotify={setErrorMsg}
-                  ocrBusy={ocrBusyId === item.id}
-                  ocrEnabled={ocrEnabled}
-                  apiTranslateEnabled={apiTranslateEnabled}
-                  tagMenuOpen={quickTagItemId === item.id}
-                  onTagMenuClose={closeQuickTagPicker}
-                />
-              ))}
+              <ClipboardCard
+                key={item.id}
+                item={item}
+                actions={cardActions}
+                tagColors={tagColorMap}
+                isSelected={selectedId === item.id}
+                quickSlot={quickSlotIndex(page, hasFilters, itemIndex)}
+                queueSlot={queueOrderFor(item.id)}
+                locale={locale}
+              />
+            ))}
+
             {page < totalPages - 1 && (
-              <button className="eacptrans-page-card" onClick={() => handlePageChange(page + 1)}>
-                <Ellipsis className="h-8 w-8" />
-                <span>{tr(locale, "loadNext")}</span>
-                <small>
+              <button
+                type="button"
+                onClick={() => handlePageChange(page + 1)}
+                className={`flex h-full w-[260px] shrink-0 flex-col items-center justify-center gap-2 text-gray-500 ${surface} ${surfaceInteractive} active:scale-[0.98] active:translate-y-0 ${focusRing}`}
+              >
+                <Ellipsis className="h-8 w-8" aria-hidden />
+                <span className="text-sm font-medium">{tr(locale, "loadNext")}</span>
+                <small className="text-xs text-gray-400">
                   {page * pageSize + currentPageItems.length + 1}-
                   {Math.min((page + 2) * pageSize, filtered.length)}
                 </small>
@@ -1738,6 +2131,36 @@ function MainApp() {
           </div>
         )}
       </main>
+
+      {cardMenu && menuItem && (
+        <CardContextMenu
+          // Changing item rebuilds the menu, so the Tag panel and the inline
+          // "new tag" form do not leak from one card to the next.
+          key={menuItem.id}
+          item={menuItem}
+          anchor={{ x: cardMenu.x, y: cardMenu.y }}
+          availableTags={assignableTagNames}
+          locale={locale}
+          isCopied={copiedId === menuItem.id}
+          ocrBusy={ocrBusyId === menuItem.id}
+          ocrEnabled={ocrEnabled}
+          apiTranslateEnabled={apiTranslateEnabled}
+          zoomShortcut={itemZoomShortcut}
+          onClose={closeCardMenu}
+          onPaste={handlePaste}
+          onCopy={handleCopyFromUI}
+          onTogglePin={handleTogglePin}
+          onDelete={handleDelete}
+          onToggleTag={handleToggleTag}
+          onCreateTag={handleCreateAndAttachTag}
+          onEnablePrivacy={handleEnablePrivacy}
+          onDisablePrivacy={handleDisablePrivacy}
+          onQuickEdit={handleQuickEdit}
+          onOcrOpen={handleOcrOpen}
+          onZoom={handleZoomSelected}
+          onNotify={setErrorMsg}
+        />
+      )}
 
       {privacyAction && (
         <PasswordPromptModal
@@ -1768,12 +2191,47 @@ function MainApp() {
           onNotify={setErrorMsg}
         />
       )}
+
+      {lightbox && (
+        <ImageLightbox
+          key={lightbox.item.id}
+          item={lightbox.item}
+          src={lightbox.src}
+          locale={locale}
+          onClose={() => setLightbox(null)}
+          onCopy={(target) => void handleCopyFromUI(target)}
+          onPaste={(target) => void handlePaste(target)}
+        />
+      )}
+
+      {matchPanel && (
+        <MatchPanel
+          item={matchPanel.item}
+          group={matchPanel.group}
+          tagColors={tagColorMap}
+          locale={locale}
+          onClose={() => setMatchPanel(null)}
+          onMatchDragStart={handleMatchDragStart}
+          onMatchDragEnd={handleMatchDragEnd}
+          onCreateCard={handleCreateCardFromText}
+        />
+      )}
     </div>
   );
 }
 
-async function writeImageDataUrl(dataUrl: string): Promise<void> {
-  const imagePath = await api.saveTempImage(dataUrl);
+/**
+ * Puts an image on the clipboard.
+ *
+ * Keyed by item id when there is one, which is the same file the drag-out
+ * prewarm uses: copying the same image repeatedly reuses one temp file instead
+ * of leaving a timestamped one behind per copy.
+ */
+async function writeImageDataUrl(dataUrl: string, itemId?: number): Promise<void> {
+  const imagePath =
+    itemId && itemId > 0
+      ? await api.stageImageForDrag(itemId)
+      : await api.saveTempImage(dataUrl);
   await writeImage(imagePath);
 }
 

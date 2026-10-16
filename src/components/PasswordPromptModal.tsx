@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { buttonPrimary, buttonSecondary, input, modalPanel, overlay } from "./ui";
 
 interface Props {
   title: string;
@@ -26,38 +27,36 @@ export function PasswordPromptModal({
   }, [title]);
 
   return (
-    <div className="eacptrans-modal-overlay fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-4">
-      <div className="eacptrans-modal-panel w-full max-w-sm rounded-xl bg-white border border-slate-200 shadow-xl p-4 space-y-3">
-        <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
-        {description && <p className="text-xs text-slate-500">{description}</p>}
+    <div className={overlay}>
+      <div className={`${modalPanel} w-full max-w-sm p-6`}>
+        <h3 className="text-base font-semibold tracking-tight text-gray-900">{title}</h3>
+        {description && <p className="mt-1 text-sm text-gray-500">{description}</p>}
+
         <input
           autoFocus
           type="password"
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !busy) {
-              onConfirm(password);
-            }
+          onChange={(event) => setPassword(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !busy) onConfirm(password);
           }}
           placeholder="输入隐私密码"
-          className="w-full px-3 py-2 rounded-md border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
+          className={`mt-4 ${input}`}
         />
-        {error && <div className="text-xs text-red-600">{error}</div>}
-        <div className="flex items-center justify-end gap-2">
-          <button
-            onClick={onClose}
-            disabled={busy}
-            className="px-3 py-1.5 text-xs rounded border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-50"
-          >
+
+        {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+
+        <div className="mt-6 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} disabled={busy} className={buttonSecondary}>
             取消
           </button>
           <button
+            type="button"
             onClick={() => onConfirm(password)}
             disabled={busy || !password.trim()}
-            className="px-3 py-1.5 text-xs rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50"
+            className={buttonPrimary}
           >
-            {busy ? "处理中..." : confirmText}
+            {busy ? "处理中…" : confirmText}
           </button>
         </div>
       </div>

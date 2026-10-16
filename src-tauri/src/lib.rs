@@ -7,9 +7,11 @@ use tauri::{
     Manager, PhysicalPosition, WebviewWindowBuilder, WindowEvent,
 };
 
-mod command_extract;
+mod app_icon;
 mod commands;
 mod db;
+mod drag_out;
+mod focus;
 mod lan_sync;
 mod ocr;
 mod pipeline;
@@ -54,11 +56,6 @@ pub(crate) fn simulate_copy_impl() {
         enigo.key_click(Key::Layout('c'));
         enigo.key_up(Key::Control);
     }
-}
-
-#[tauri::command]
-fn simulate_paste() {
-    simulate_paste_impl();
 }
 
 #[cfg(target_os = "windows")]
@@ -110,6 +107,9 @@ pub(crate) fn show_main_window_near_cursor<R: tauri::Runtime>(
     window
         .set_position(PhysicalPosition::new(next_x, next_y))
         .map_err(|e| e.to_string())?;
+    // Remembered before the panel takes focus: this is the window the user was
+    // typing in, and therefore the one a paste has to be sent back to.
+    focus::remember_foreground_window(focus::native_handle(&window));
     window.show().map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())?;
     Ok(())
@@ -142,6 +142,20 @@ fn read_window_state(app: &tauri::AppHandle) -> Option<(f64, f64, f64, f64)> {
     let x = parsed.get("windowX")?.as_f64()?;
     let y = parsed.get("windowY")?.as_f64()?;
     Some((width, height, x, y))
+}
+
+/// Reads a boolean flag out of a saved config document.
+fn flag_from_config_json(raw: &str, key: &str) -> Option<bool> {
+    let parsed = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    parsed.get(key)?.as_bool()
+}
+
+/// The same for the config on disk, for values the window needs at creation
+/// time — before any front-end code has run.
+fn read_saved_flag(app: &tauri::AppHandle, key: &str) -> Option<bool> {
+    let conf_path = app.path().app_data_dir().ok()?.join("config.json");
+    let data = std::fs::read_to_string(conf_path).ok()?;
+    flag_from_config_json(&data, key)
 }
 
 fn sanitize_window_state(
@@ -238,6 +252,15 @@ fn create_main_window(app: &mut tauri::App) -> tauri::Result<()> {
     }
 
     window_config.visible = true;
+    // Tauri routes file drops through the native layer by default, which on
+    // Windows suppresses every HTML5 drag event in the webview. The panel needs
+    // DOM drag-and-drop for dropping extracted matches back onto the strip, and
+    // inbound OS file drops are not a feature here.
+    window_config.drag_drop_enabled = false;
+    // Applied at creation so a pinned panel comes back pinned. Waiting for the
+    // front-end to read the config would leave the window unpinned until then,
+    // and unpinned for good if that read failed.
+    window_config.always_on_top = read_saved_flag(app.handle(), "alwaysOnTop").unwrap_or(false);
     WebviewWindowBuilder::from_config(app.handle(), &window_config)?.build()?;
     Ok(())
 }
@@ -411,10 +434,16 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            simulate_paste,
+            focus::paste_to_previous_window,
             commands::ingest_clipboard,
             commands::read_clipboard_files,
             commands::get_active_window,
+            app_icon::get_active_window_info,
+            app_icon::get_app_icon,
+            drag_out::start_drag_out,
+            commands::stage_image_for_drag,
+            commands::validate_tag_pattern,
+            commands::preview_tag_pattern,
             commands::is_paste_shortcut_down,
             commands::load_history,
             commands::get_text_item,
@@ -442,7 +471,6 @@ pub fn run() {
             commands::read_image_as_data_url,
             commands::get_config,
             commands::set_config,
-            commands::get_frequent_commands,
             shortcuts::refresh_global_shortcuts,
             shortcuts::probe_shortcut_available,
             shortcuts::sync_queue_state,
@@ -455,4 +483,33 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::flag_from_config_json;
+
+    #[test]
+    fn reads_a_boolean_flag() {
+        let raw = r#"{"alwaysOnTop":true,"pageSize":50}"#;
+        assert_eq!(flag_from_config_json(raw, "alwaysOnTop"), Some(true));
+    }
+
+    #[test]
+    fn reads_a_false_flag_rather_than_reporting_it_missing() {
+        // The distinction matters: `None` falls back to a default, and a window
+        // created on the wrong default is exactly the bug this guards.
+        assert_eq!(flag_from_config_json(r#"{"alwaysOnTop":false}"#, "alwaysOnTop"), Some(false));
+    }
+
+    #[test]
+    fn ignores_a_flag_of_the_wrong_type() {
+        assert_eq!(flag_from_config_json(r#"{"alwaysOnTop":"yes"}"#, "alwaysOnTop"), None);
+    }
+
+    #[test]
+    fn tolerates_a_missing_key_or_broken_document() {
+        assert_eq!(flag_from_config_json("{}", "alwaysOnTop"), None);
+        assert_eq!(flag_from_config_json("not json", "alwaysOnTop"), None);
+    }
 }

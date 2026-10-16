@@ -29,8 +29,11 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 sha2 = "0.10"
 hex = "0.4"
 clipboard-win = "5.4.1"
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_WinRT", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Foundation", "Foundation_Collections", "Globalization", "Graphics_Imaging", "Media_Ocr", "Storage", "Storage_Streams"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_WinRT", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Foundation", "Foundation_Collections", "Globalization", "Graphics_Imaging", "Media_Ocr", "Storage", "Storage_Streams", "Win32_System_Ole", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_SystemServices", "Win32_System_Memory", "Win32_System_DataExchange", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem"] }
 windows-future = "0.2"
+# The `#[implement]` macro expands to `::windows_core::` paths, so the crate has
+# to be nameable from this crate's root.
+windows-core = "0.61"
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-process = "2.3.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

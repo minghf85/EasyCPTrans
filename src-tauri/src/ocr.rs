@@ -1,6 +1,5 @@
 use crate::commands::{
     attach_device_identity, emit_changed, merge_unique_tags, parse_metadata, read_app_config,
-    record_frequent_commands,
 };
 use crate::db::{compute_hash, AppState};
 use crate::pipeline::{ClipboardItem, Pipeline, PipelineOutcome};
@@ -376,7 +375,62 @@ async fn store_ocr_result(
         .await
         .map_err(|e| e.to_string())?;
 
+    // Recognition just gave this image the only searchable text it will ever
+    // have, which is the one moment a regex rule can apply to one — so the rules
+    // run again here, and the tag shows up without the user re-copying anything.
+    apply_tag_rules_to_recognized_item(app, pool, item_id, &metadata).await?;
+
     emit_changed(app).await;
+    Ok(())
+}
+
+/// Awards regex-tag matches to an item that has just been recognized.
+async fn apply_tag_rules_to_recognized_item(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    item_id: i64,
+    metadata: &std::collections::HashMap<String, Vec<String>>,
+) -> Result<(), String> {
+    let rules = crate::commands::tag_rules_from_config(&crate::commands::read_app_config(app));
+    if rules.is_empty() {
+        return Ok(());
+    }
+
+    let row = sqlx::query("SELECT content_type, content, tags FROM clipboard_items WHERE id = ?1 LIMIT 1")
+        .bind(item_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(row) = row else {
+        return Ok(());
+    };
+
+    let mut item = crate::pipeline::ClipboardItem {
+        content_type: row.try_get("content_type").unwrap_or_default(),
+        content: row.try_get("content").unwrap_or_default(),
+        source_app: None,
+        metadata: metadata.clone(),
+        tags: row
+            .try_get::<Option<String>, _>("tags")
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+            .unwrap_or_default(),
+    };
+
+    let existing = item.tags.clone();
+    crate::pipeline::tag_rules::apply_tag_rules(&mut item, &rules);
+    if item.tags == existing {
+        return Ok(());
+    }
+
+    let tags_json = serde_json::to_string(&item.tags).unwrap_or_else(|_| "[]".into());
+    sqlx::query("UPDATE clipboard_items SET tags = ?1 WHERE id = ?2")
+        .bind(&tags_json)
+        .bind(item_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -597,12 +651,6 @@ pub async fn create_text_item_from_ocr(app: AppHandle, id: i64) -> Result<i64, S
         .map_err(|e| e.to_string())?
         .last_insert_rowid()
     };
-
-    if let Some(commands) = processed.metadata.get("commands") {
-        record_frequent_commands(pool, commands, processed.source_app.as_deref())
-            .await
-            .map_err(|e| e.to_string())?;
-    }
 
     emit_changed(&app).await;
     Ok(item_id)
