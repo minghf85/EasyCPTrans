@@ -9,13 +9,31 @@ use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const PRIVATE_TAG: &str = "Private";
 const PINNED_TAG: &str = "Pinned";
-static ECDICT_CSV_CACHE: once_cell::sync::Lazy<
-    std::sync::Mutex<HashMap<PathBuf, HashMap<String, DictionaryEntry>>>,
-> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// TTL for dictionary caches: 5 minutes of inactivity before eviction.
+const DICT_CACHE_TTL_SECS: u64 = 300;
+
+struct CachedDictData {
+    entries: HashMap<String, DictionaryEntry>,
+    last_access: Instant,
+}
+
+struct DictCacheState {
+    csv_cache: std::sync::Mutex<HashMap<PathBuf, CachedDictData>>,
+    sqlite_pools: std::sync::Mutex<HashMap<PathBuf, Arc<SqlitePool>>>,
+}
+
+static DICT_CACHE: once_cell::sync::Lazy<DictCacheState> =
+    once_cell::sync::Lazy::new(|| DictCacheState {
+        csv_cache: std::sync::Mutex::new(HashMap::new()),
+        sqlite_pools: std::sync::Mutex::new(HashMap::new()),
+    });
 
 fn is_privacy_tag(tag: &str) -> bool {
     let normalized = tag.trim().to_lowercase();
@@ -815,14 +833,24 @@ async fn lookup_ecdict_sqlite(path: &Path, query: &str) -> Result<Option<Diction
         query
     );
     let started = std::time::Instant::now();
-    let options = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(path)
-        .read_only(true);
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .map_err(|err| err.to_string())?;
+
+    let pool = {
+        let mut pools = DICT_CACHE.sqlite_pools.lock().map_err(|e| e.to_string())?;
+        pools
+            .entry(path.to_path_buf())
+            .or_insert_with(|| {
+                let options = sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(path)
+                    .read_only(true);
+                Arc::new(
+                    sqlx::sqlite::SqlitePoolOptions::new()
+                        .max_connections(1)
+                        .connect_lazy_with(options),
+                )
+            })
+            .clone()
+    };
+
     let normalized = query.to_ascii_lowercase();
     let stripped = strip_word(query);
     let row = sqlx::query(
@@ -834,7 +862,7 @@ async fn lookup_ecdict_sqlite(path: &Path, query: &str) -> Result<Option<Diction
     )
     .bind(&normalized)
     .bind(&stripped)
-    .fetch_optional(&pool)
+    .fetch_optional(pool.as_ref())
     .await
     .map_err(|err| err.to_string())?;
 
@@ -873,33 +901,67 @@ fn lookup_ecdict_csv(path: &Path, query: &str) -> Result<Option<DictionaryEntry>
         query
     );
     let started = std::time::Instant::now();
-    if let Ok(mut cache) = ECDICT_CSV_CACHE.lock() {
-        if !cache.contains_key(path) {
-            println!(
-                "[EasyCPTrans] ECDICT csv cache loading: path={}",
-                path.display()
-            );
-            let data = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
-            let mut entries = HashMap::new();
-            for (index, line) in data.lines().enumerate() {
-                if index == 0 {
-                    continue;
-                }
-                let columns = split_csv_line(line);
-                let Some(entry) = dictionary_entry_from_columns(&columns) else {
-                    continue;
-                };
-                entries.insert(entry.word.to_ascii_lowercase(), entry.clone());
-                entries.entry(strip_word(&entry.word)).or_insert(entry);
-            }
-            cache.insert(path.to_path_buf(), entries);
-        }
-        if let Some(entries) = cache.get(path) {
+
+    if let Ok(mut cache) = DICT_CACHE.csv_cache.lock() {
+        // Evict stale entries
+        cache.retain(|_, v| v.last_access.elapsed().as_secs() < DICT_CACHE_TTL_SECS);
+
+        let cached = cache.get_mut(path);
+        if let Some(cached) = cached {
+            cached.last_access = Instant::now();
             let normalized = query.trim().to_ascii_lowercase();
             let stripped = strip_word(query);
-            let entry = entries
+            let entry = cached
+                .entries
                 .get(&normalized)
-                .or_else(|| entries.get(&stripped))
+                .or_else(|| cached.entries.get(&stripped))
+                .cloned();
+            println!(
+                "[EasyCPTrans] ECDICT csv lookup finish: path={}, query={}, hit={}, elapsed_ms={}",
+                path.display(),
+                query,
+                entry
+                    .as_ref()
+                    .map(|entry| entry.word.as_str())
+                    .unwrap_or("<none>"),
+                started.elapsed().as_millis()
+            );
+            return Ok(entry);
+        }
+
+        // Cache miss — load and cache
+        println!(
+            "[EasyCPTrans] ECDICT csv cache loading: path={}",
+            path.display()
+        );
+        let data = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
+        let mut entries = HashMap::new();
+        for (index, line) in data.lines().enumerate() {
+            if index == 0 {
+                continue;
+            }
+            let columns = split_csv_line(line);
+            let Some(entry) = dictionary_entry_from_columns(&columns) else {
+                continue;
+            };
+            entries.insert(entry.word.to_ascii_lowercase(), entry.clone());
+            entries.entry(strip_word(&entry.word)).or_insert(entry);
+        }
+        cache.insert(
+            path.to_path_buf(),
+            CachedDictData {
+                entries,
+                last_access: Instant::now(),
+            },
+        );
+
+        if let Some(cached) = cache.get(path) {
+            let normalized = query.trim().to_ascii_lowercase();
+            let stripped = strip_word(query);
+            let entry = cached
+                .entries
+                .get(&normalized)
+                .or_else(|| cached.entries.get(&stripped))
                 .cloned();
             println!(
                 "[EasyCPTrans] ECDICT csv lookup finish: path={}, query={}, hit={}, elapsed_ms={}",
@@ -915,6 +977,7 @@ fn lookup_ecdict_csv(path: &Path, query: &str) -> Result<Option<DictionaryEntry>
         }
     }
 
+    // Fallback: direct read without caching
     let data = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
     let normalized = query.trim().to_ascii_lowercase();
     let stripped = strip_word(query);

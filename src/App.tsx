@@ -46,7 +46,6 @@ import {
   surface,
   surfaceInteractive,
   transition,
-  tray,
 } from "./components/ui";
 import { resetClipboardStack, useClipboardWatcher, setInjectedOverrideSig } from "./hooks/useClipboardWatcher";
 import { useHistory } from "./hooks/useHistory";
@@ -894,13 +893,12 @@ function MainApp() {
           .map((path) => path.trim())
           .filter(Boolean);
         if (paths.length === 0) throw new Error("No file paths on this item");
-        outcome = await api.startDragOut({ files: paths, ...chip });
+        const dropped = await api.nativeDragFile(paths);
+        outcome = dropped ? "copy" : "cancelled";
       } else if (item.contentType === "image") {
-        // The temp file was staged when the image came into view, so this is a
-        // map lookup; a drag that beat the prewarm waits for it instead. Either
-        // way there is no data-URL round trip in front of the drag loop.
         const path = stagedDropPath(item) ?? (await ensureStagedDropPath(item));
-        outcome = await api.startDragOut({ files: [path], ...chip });
+        const dropped = await api.nativeDragFile([path]);
+        outcome = dropped ? "copy" : "cancelled";
       } else {
         outcome = await api.startDragOut({ text: item.content, ...chip });
       }
@@ -1261,6 +1259,7 @@ function MainApp() {
       onOpenMatchPanel: (target: HistoryItem, group: TagMatchGroup) =>
         setMatchPanel({ item: target, group }),
       onContextMenu: openCardMenu,
+      onHover: (target: HistoryItem) => setSelectedId(target.id),
     } satisfies CardActions,
   );
 
@@ -2051,9 +2050,11 @@ function MainApp() {
             : "flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4"
         }
       >
-        {activeView === "settings" ? (
+        {/* Settings and TagManager stay mounted to preserve form state across tab switches. */}
+        <div className={activeView === "settings" ? "" : "hidden"}>
           <SettingsModal ref={settingsModalRef} locale={locale} onSaved={handleSettingsSaved} />
-        ) : activeView === "tag-manager" ? (
+        </div>
+        <div className={activeView === "tag-manager" ? "" : "hidden"}>
           <TagManagementPage
             tags={allKnownTags}
             tagCounts={tagCountMap}
@@ -2066,69 +2067,73 @@ function MainApp() {
             onSetPattern={handleSetManagedTagPattern}
             locale={locale}
           />
-        ) : filtered.length === 0 ? (
-          <EmptyState
-            locale={locale}
-            filtered={hasFilters && sourceHistory.length > 0}
-            onClear={hasFilters ? clearFilters : undefined}
-          />
-        ) : (
-          <div
-            ref={cardStripRef}
-            id="card-scroll"
-            // The padding is what clears the selected card's `ring-2`: a scroll
-            // container clips at its padding box, so any bleed has to be inside
-            // it. `!bg-blue-50` because the tray's own background would otherwise
-            // win on stylesheet order.
-            className={`${tray} ${transition} ${
-              stripDropActive ? "!bg-blue-50 ring-2 ring-blue-500" : ""
-            }`}
-            onDragOver={handleStripDragOver}
-            onDragLeave={handleStripDragLeave}
-            onDrop={handleStripDrop}
-          >
-            {page > 0 && (
-              <button
-                type="button"
-                onClick={() => handlePageChange(page - 1)}
-                className={`flex h-full w-[260px] shrink-0 flex-col items-center justify-center gap-2 text-gray-500 ${surface} ${surfaceInteractive} active:scale-[0.98] active:translate-y-0 ${focusRing}`}
-              >
-                <Ellipsis className="h-8 w-8" aria-hidden />
-                <span className="text-sm font-medium">{tr(locale, "loadPrevious")}</span>
-                <small className="text-xs text-gray-400">
-                  {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, filtered.length)}
-                </small>
-              </button>
-            )}
-
-            {currentPageItems.map((item, itemIndex) => (
-              <ClipboardCard
-                key={item.id}
-                item={item}
-                actions={cardActions}
-                tagColors={tagColorMap}
-                isSelected={selectedId === item.id}
-                quickSlot={quickSlotIndex(page, hasFilters, itemIndex)}
-                queueSlot={queueOrderFor(item.id)}
+        </div>
+        {activeView !== "settings" && activeView !== "tag-manager" && (
+          <>
+            {filtered.length === 0 ? (
+              <EmptyState
                 locale={locale}
+                filtered={hasFilters && sourceHistory.length > 0}
+                onClear={hasFilters ? clearFilters : undefined}
               />
-            ))}
-
-            {page < totalPages - 1 && (
-              <button
-                type="button"
-                onClick={() => handlePageChange(page + 1)}
-                className={`flex h-full w-[260px] shrink-0 flex-col items-center justify-center gap-2 text-gray-500 ${surface} ${surfaceInteractive} active:scale-[0.98] active:translate-y-0 ${focusRing}`}
+            ) : (
+              <div
+                ref={cardStripRef}
+                id="card-scroll"
+                // The padding is what clears the selected card's `ring-2`: a scroll
+                // container clips at its padding box, so any bleed has to be inside
+                // it. Cards sit directly in the lower area — no recessed well.
+                className={`eacp-scroll flex h-full gap-4 overflow-x-auto overflow-y-hidden p-3 ${transition} ${
+                  stripDropActive ? "!bg-blue-50 ring-2 ring-blue-500" : ""
+                }`}
+                onDragOver={handleStripDragOver}
+                onDragLeave={handleStripDragLeave}
+                onDrop={handleStripDrop}
               >
-                <Ellipsis className="h-8 w-8" aria-hidden />
-                <span className="text-sm font-medium">{tr(locale, "loadNext")}</span>
-                <small className="text-xs text-gray-400">
-                  {page * pageSize + currentPageItems.length + 1}-
-                  {Math.min((page + 2) * pageSize, filtered.length)}
-                </small>
-              </button>
+                {page > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handlePageChange(page - 1)}
+                    className={`flex h-full w-[260px] shrink-0 flex-col items-center justify-center gap-2 text-gray-500 ${surface} ${surfaceInteractive} active:scale-[0.98] active:translate-y-0 ${focusRing}`}
+                  >
+                    <Ellipsis className="h-8 w-8" aria-hidden />
+                    <span className="text-sm font-medium">{tr(locale, "loadPrevious")}</span>
+                    <small className="text-xs text-gray-400">
+                      {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, filtered.length)}
+                    </small>
+                  </button>
+                )}
+
+                {currentPageItems.map((item, itemIndex) => (
+                  <ClipboardCard
+                    key={item.id}
+                    item={item}
+                    actions={cardActions}
+                    tagColors={tagColorMap}
+                    isSelected={selectedId === item.id}
+                    quickSlot={quickSlotIndex(page, hasFilters, itemIndex)}
+                    queueSlot={queueOrderFor(item.id)}
+                    locale={locale}
+                  />
+                ))}
+
+                {page < totalPages - 1 && (
+                  <button
+                    type="button"
+                    onClick={() => handlePageChange(page + 1)}
+                    className={`flex h-full w-[260px] shrink-0 flex-col items-center justify-center gap-2 text-gray-500 ${surface} ${surfaceInteractive} active:scale-[0.98] active:translate-y-0 ${focusRing}`}
+                  >
+                    <Ellipsis className="h-8 w-8" aria-hidden />
+                    <span className="text-sm font-medium">{tr(locale, "loadNext")}</span>
+                    <small className="text-xs text-gray-400">
+                      {page * pageSize + currentPageItems.length + 1}-
+                      {Math.min((page + 2) * pageSize, filtered.length)}
+                    </small>
+                  </button>
+                )}
+              </div>
             )}
-          </div>
+          </>
         )}
       </main>
 

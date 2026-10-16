@@ -441,6 +441,7 @@ pub fn run() {
             app_icon::get_active_window_info,
             app_icon::get_app_icon,
             drag_out::start_drag_out,
+            drag_out::native_drag_file,
             commands::stage_image_for_drag,
             commands::validate_tag_pattern,
             commands::preview_tag_pattern,

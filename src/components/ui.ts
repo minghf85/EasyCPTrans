@@ -19,8 +19,8 @@
  *    list get a filled highlight, the way a native menu does.
  */
 
-/** Shared timing. Nothing in the app animates for longer than this. */
-export const transition = "transition duration-200 ease-out";
+/** Shared timing. Only cheap, compositor-friendly properties are transitioned. */
+export const transition = "transition-[color,background-color,border-color,opacity,transform] duration-200 ease-out";
 
 /**
  * Keyboard focus ring for a standalone control. No offset: the ring already
@@ -56,8 +56,8 @@ export const tray =
 /** A bordered container: card, modal panel, list group. */
 export const surface = "rounded-xl border border-gray-200 bg-white shadow-sm";
 
-/** Hover for a bordered container: a firmer edge and a deeper shadow, no movement. */
-export const surfaceInteractive = `${transition} hover:border-gray-300 hover:shadow-md`;
+/** Hover for a bordered container: a firmer edge only — no shadow transition. */
+export const surfaceInteractive = `${transition} hover:border-gray-300`;
 
 /** Recessed area *inside* a container — no border, the container already has one. */
 export const inset = "rounded-lg bg-gray-50";

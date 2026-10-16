@@ -40,10 +40,11 @@ import { fileBasename, fileKindFor, fileParentDir } from "../lib/fileIcons";
 import { collectTagMatches, type TagMatchGroup } from "../lib/tagMatches";
 import { tr, normalizeLocale, type Locale } from "../lib/i18n";
 import { useCardGesture, type CardGesturePhase } from "../hooks/useCardGesture";
+import { useCardTilt } from "../hooks/useCardTilt";
 import { prewarmImageDrop } from "../lib/dropStage";
 import type { HistoryItem } from "../types";
 import { MatchStack } from "./RegexMatchStack";
-import { focusRing, inset, surface, surfaceInteractive, transition } from "./ui";
+import { focusRing, inset, transition } from "./ui";
 
 function formatBytes(bytes: number, decimals = 1) {
   if (!+bytes) return "0 B";
@@ -243,6 +244,8 @@ export interface CardActions {
   onOpenMatchPanel: (item: HistoryItem, group: TagMatchGroup) => void;
   /** Reports a right click, so the actions menu can be opened at the pointer. */
   onContextMenu: (item: HistoryItem, anchor: { x: number; y: number }) => void;
+  /** Reports a hover, so the parent can track the current card. */
+  onHover: (item: HistoryItem) => void;
 }
 
 interface Props {
@@ -273,6 +276,7 @@ export const ClipboardCard = memo(function ClipboardCard({
   );
   const imageContainerRef = useRef<HTMLDivElement | null>(null);
   const imageRequestedRef = useRef(false);
+  const { cardRef: tiltRef, updateTilt, resetTilt } = useCardTilt();
 
   // The source application's colour: read from its icon, with a stable fallback
   // so the first paint is never blank.
@@ -602,6 +606,7 @@ export const ClipboardCard = memo(function ClipboardCard({
 
   return (
     <article
+      ref={tiltRef}
       id={`history-item-${item.id}`}
       data-card-id={item.id}
       // Programmatic focus target only, so the actions menu can hand focus back
@@ -611,11 +616,21 @@ export const ClipboardCard = memo(function ClipboardCard({
         event.preventDefault();
         actions.onContextMenu(item, { x: event.clientX, y: event.clientY });
       }}
-      className={`flex h-full w-[320px] shrink-0 flex-col overflow-hidden focus:outline-none ${surface} ${surfaceInteractive} ${phaseAnimation} ${
-        // Selection is not focus, so the ring sits on the border rather than
-        // being offset — an offset ring here would read as a stray white halo.
-        isSelected ? "border-blue-500 ring-2 ring-blue-500" : ""
-      }`}
+      onMouseMove={updateTilt}
+      onMouseLeave={() => {
+        resetTilt();
+      }}
+      onMouseEnter={() => {
+        actions.onHover(item);
+      }}
+      className={`flex h-full w-[320px] shrink-0 flex-col overflow-hidden rounded-xl bg-white transition-all duration-200 ease-out will-change-transform focus:outline-none ${
+        // Card shadow: vPaste-style deep drop shadow with subtle white inner border.
+        // The inset white border creates a soft edge glow that makes the card feel
+        // like it's floating above the surface.
+        isSelected
+          ? "shadow-[0_16px_40px_rgba(37,99,235,0.35),inset_0_0_0_2px_rgba(37,99,235,0.50)]"
+          : "shadow-[0_12px_28px_rgba(0,0,0,0.12),inset_0_0_0_1px_rgba(255,255,255,0.55)] hover:shadow-[0_16px_34px_rgba(0,0,0,0.15),inset_0_0_0_1px_rgba(255,255,255,0.68)]"
+      } ${phaseAnimation}`}
     >
       {/* Two layers, not one picture: the band carries the source colour and its
           name, and the icon sits on its own white plate that breaks past the
@@ -624,7 +639,7 @@ export const ClipboardCard = memo(function ClipboardCard({
           the only part of the card that knows where this came from, so hovering
           it names the full source. */}
       <header
-        className="relative shrink-0 px-4 py-3 pl-[84px]"
+        className="relative shrink-0 px-4 py-3 pl-[84px] shadow-[inset_0_1px_0_rgba(255,255,255,0.58),0_1px_10px_rgba(20,28,24,0.05)]"
         style={{ backgroundColor: bandColor }}
         title={sourceDetail}
       >
@@ -643,6 +658,7 @@ export const ClipboardCard = memo(function ClipboardCard({
         </span>
       </header>
 
+      {/* Content area: clean padding, depth comes from the card's overall shadow. */}
       <div className="flex min-h-0 flex-1 flex-col px-5 pb-5 pt-8">
         {/* The gesture surface, and only the content: press and hold to drag the
             card out, click to paste. The band above is a label and the row below

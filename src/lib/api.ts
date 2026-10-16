@@ -53,6 +53,14 @@ export const api = {
   }) => invoke<string>("start_drag_out", { payload }),
 
   /**
+   * Native file drag via the Shell API (vPaste method).
+   * Synchronous — blocks until the drop resolves.
+   * Returns true if dropped, false if cancelled.
+   */
+  nativeDragFile: (paths: string[]) =>
+    invoke<boolean>("native_drag_file", { paths }),
+
+  /**
    * Runs a regex rule without saving it.
    *
    * Compiled by the same crate the ingest pipeline uses, so a pattern that

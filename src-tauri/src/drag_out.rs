@@ -75,6 +75,128 @@ pub async fn start_drag_out(payload: DragOutPayload) -> Result<String, String> {
     }
 }
 
+/// Native file drag via the Shell API — the same path vPaste uses.
+///
+/// `ILCreateFromPathW` → `SHCreateShellItemArrayFromIDLists` →
+/// `BindToHandler(BHID_DataObject)` → `SHDoDragDrop`.
+///
+/// The Shell builds the `IDataObject`, so drop targets see exactly the same
+/// formats they would from Explorer. Synchronous: `SHDoDragDrop` enters its own
+/// modal loop, so an async wrapper would only add latency.
+#[tauri::command]
+pub fn native_drag_file(paths: Vec<String>) -> Result<bool, String> {
+    if paths.is_empty() {
+        return Err("No files to drag".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        shell_drag::run_shell_drag(paths)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("File dragging is only supported on Windows".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod shell_drag {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{IBindCtx, IDataObject};
+    use windows::Win32::System::Ole::{
+        IDropSource, OleInitialize, OleUninitialize, DROPEFFECT_COPY, DROPEFFECT_NONE,
+    };
+    use windows::Win32::UI::Shell::{
+        BHID_DataObject, ILCreateFromPathW, ILFree, SHCreateShellItemArrayFromIDLists,
+        SHDoDragDrop,
+    };
+
+    /// Strips the `\\?\` verbatim prefix that Windows APIs sometimes add.
+    /// The Shell APIs reject paths with that prefix.
+    fn shell_compatible_windows_path(path: &str) -> String {
+        if let Some(path) = path.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{path}")
+        } else if let Some(path) = path.strip_prefix(r"\\?\") {
+            path.to_string()
+        } else {
+            path.to_string()
+        }
+    }
+
+    unsafe fn create_shell_file_item_array(
+        paths: &[String],
+    ) -> Result<windows::Win32::UI::Shell::IShellItemArray, String> {
+        if paths.is_empty() {
+            return Err("native drag requires at least one file".to_string());
+        }
+
+        let mut pidls = Vec::with_capacity(paths.len());
+        for path in paths {
+            let hstring = HSTRING::from(path.as_str());
+            let pidl = ILCreateFromPathW(&hstring);
+            if pidl.is_null() {
+                for pidl in pidls {
+                    ILFree(Some(pidl));
+                }
+                return Err("create Shell drag item failed".to_string());
+            }
+            pidls.push(pidl);
+        }
+
+        let pidl_refs: Vec<_> = pidls.iter().map(|pidl| *pidl as *const _).collect();
+        let result = SHCreateShellItemArrayFromIDLists(&pidl_refs)
+            .map_err(|err| format!("create Shell drag item array failed: {err}"));
+
+        for pidl in pidls {
+            ILFree(Some(pidl));
+        }
+        result
+    }
+
+    unsafe fn create_shell_file_data_object(
+        paths: &[String],
+    ) -> Result<IDataObject, String> {
+        let items = create_shell_file_item_array(paths)?;
+        items
+            .BindToHandler(None::<&IBindCtx>, &BHID_DataObject)
+            .map_err(|err| format!("create Shell file data object failed: {err}"))
+    }
+
+    pub fn run_shell_drag(paths: Vec<String>) -> Result<bool, String> {
+        let paths: Vec<String> = paths
+            .into_iter()
+            .map(|path| {
+                let path = std::path::PathBuf::from(path)
+                    .canonicalize()
+                    .map_err(|err| format!("resolve drag file path failed: {err}"))?;
+                let path = path
+                    .to_str()
+                    .ok_or_else(|| "drag file path is not valid unicode".to_string())?;
+                Ok(shell_compatible_windows_path(path))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        unsafe {
+            OleInitialize(None).map_err(|err| format!("initialize Windows OLE failed: {err}"))?;
+            let result = (|| {
+                let data_object = create_shell_file_data_object(&paths)?;
+                let effect = SHDoDragDrop(
+                    Some(HWND(std::ptr::null_mut())),
+                    &data_object,
+                    None::<&IDropSource>,
+                    DROPEFFECT_COPY,
+                )
+                .map_err(|err| format!("native drag failed: {err}"))?;
+                Ok(effect != DROPEFFECT_NONE)
+            })();
+            OleUninitialize();
+            result
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod imp {
     use super::{DragOutPayload, DragPreview};
