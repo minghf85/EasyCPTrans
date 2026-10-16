@@ -1,23 +1,60 @@
-const MAX_ENTRIES = 24;
+const MAX_ENTRIES = 8;
+const TTL_MS = 60_000;
 
-const cache = new Map<number, string>();
+let clock = 0;
+
+interface CacheEntry {
+  dataUrl: string;
+  lastAccess: number;
+  order: number;
+}
+
+const cache = new Map<number, CacheEntry>();
 const inflight = new Map<number, Promise<string>>();
 
+function evictExpired() {
+  const now = Date.now();
+  for (const [id, entry] of cache) {
+    if (now - entry.lastAccess > TTL_MS) {
+      cache.delete(id);
+    }
+  }
+}
+
+function evictOldest() {
+  let oldestId: number | undefined;
+  let oldestOrder = Infinity;
+  for (const [id, entry] of cache) {
+    if (entry.order < oldestOrder) {
+      oldestOrder = entry.order;
+      oldestId = id;
+    }
+  }
+  if (oldestId !== undefined) cache.delete(oldestId);
+}
+
 export function getCachedImage(id: number): string | null {
-  const hit = cache.get(id);
-  if (hit === undefined) return null;
-  cache.delete(id);
-  cache.set(id, hit);
-  return hit;
+  const entry = cache.get(id);
+  if (entry === undefined) return null;
+  if (Date.now() - entry.lastAccess > TTL_MS) {
+    cache.delete(id);
+    return null;
+  }
+  entry.lastAccess = Date.now();
+  entry.order = ++clock;
+  return entry.dataUrl;
 }
 
 export function rememberImage(id: number, dataUrl: string) {
-  cache.set(id, dataUrl);
+  cache.set(id, { dataUrl, lastAccess: Date.now(), order: ++clock });
+  evictExpired();
   while (cache.size > MAX_ENTRIES) {
-    const oldest = cache.keys().next().value;
-    if (oldest === undefined) break;
-    cache.delete(oldest);
+    evictOldest();
   }
+}
+
+export function forgetImage(id: number) {
+  cache.delete(id);
 }
 
 export function fetchImageDataUrl(

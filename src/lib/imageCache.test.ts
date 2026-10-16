@@ -83,7 +83,7 @@ describe("rememberImage / getCachedImage", () => {
 
   it("evicts the oldest entry once the cache is full", async () => {
     const cache = await freshCache();
-    const size = 24; // MAX_ENTRIES
+    const size = 8; // MAX_ENTRIES
 
     for (let index = 0; index < size + 1; index += 1) {
       cache.rememberImage(index, dataUrl(`v${index}`));
@@ -95,7 +95,7 @@ describe("rememberImage / getCachedImage", () => {
 
   it("counts a read as recent, so a read entry survives the next eviction", async () => {
     const cache = await freshCache();
-    const size = 24;
+    const size = 8;
 
     for (let index = 0; index < size; index += 1) {
       cache.rememberImage(index, dataUrl(`v${index}`));
@@ -105,6 +105,22 @@ describe("rememberImage / getCachedImage", () => {
     cache.rememberImage(999, dataUrl("v999"));
 
     expect(cache.getCachedImage(0)).toBe(dataUrl("v0"));
+    expect(cache.getCachedImage(1)).toBeNull();
+  });
+
+  it("evicts entries older than the TTL", async () => {
+    vi.useFakeTimers();
+    const cache = await freshCache();
+    cache.rememberImage(1, dataUrl("old"));
+    vi.advanceTimersByTime(61_000);
+    expect(cache.getCachedImage(1)).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("forgetImage removes an entry immediately", async () => {
+    const cache = await freshCache();
+    cache.rememberImage(1, dataUrl("x"));
+    cache.forgetImage(1);
     expect(cache.getCachedImage(1)).toBeNull();
   });
 });

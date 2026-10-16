@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { formatExactTime, formatTime } from "../lib/time";
 import { api } from "../lib/api";
-import { fetchImageDataUrl } from "../lib/imageCache";
+import { fetchImageDataUrl, forgetImage } from "../lib/imageCache";
 import { fetchAppIcon, getCachedAppIcon } from "../lib/appIcons";
 import { brandColorFor, headerBandColor, prewarmBrandColor } from "../lib/brandColor";
 import {
@@ -371,22 +371,33 @@ export const ClipboardCard = memo(function ClipboardCard({
   }, [appPath, appIconSrc]);
 
   useEffect(() => {
-    if (item.contentType !== "image" || hasPrivacy || imageSrc || imageRequestedRef.current) return;
+    if (item.contentType !== "image" || hasPrivacy) return;
     const node = imageContainerRef.current;
     if (!node) return;
+
+    // Track visibility continuously: load when the card enters view, unload
+    // when it leaves so off-screen images don't accumulate in memory.
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((entry) => entry.isIntersecting) && !imageRequestedRef.current) {
-          imageRequestedRef.current = true;
-          observer.disconnect();
-          void fetchImageDataUrl(item.id, api.getImageContent)
-            .then((dataUrl) => {
-              setImageSrc(dataUrl);
-              // The image is on screen, so a drag-out is plausible: stage the
-              // temp file now instead of inside the gesture.
-              prewarmImageDrop(item);
-            })
-            .catch(() => setImageSrc(""));
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            if (!imageRequestedRef.current) {
+              imageRequestedRef.current = true;
+              void fetchImageDataUrl(item.id, api.getImageContent)
+                .then((dataUrl) => {
+                  setImageSrc(dataUrl);
+                  prewarmImageDrop(item);
+                })
+                .catch(() => setImageSrc(""));
+            }
+          } else if (imageSrc) {
+            // Card scrolled out of view: release the image data so the GC can
+            // reclaim the base64 bytes. The cache entry is also dropped so a
+            // future scroll-back re-fetches fresh data.
+            setImageSrc(null);
+            forgetImage(item.id);
+            imageRequestedRef.current = false;
+          }
         }
       },
       { root: null, threshold: 0.05 },
