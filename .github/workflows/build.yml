@@ -62,7 +62,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path installers | Out-Null
           Copy-Item "src-tauri/target/release/bundle/nsis/*.exe" installers/ -ErrorAction SilentlyContinue
-          Copy-Item "src-tauri/target/release/bundle/msi/*.msi" installers/ -ErrorAction SilentlyContinue
           if (-not (Get-ChildItem installers)) {
             throw "Tauri produced no installer - check bundle.targets in src-tauri/tauri.conf.json"
           }

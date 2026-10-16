@@ -877,13 +877,20 @@ function MainApp() {
    * `preview` travels along so OLE draws the card's own chip under the cursor
    * instead of its generic feedback.
    */
-  const handleCardDragOut = async (item: HistoryItem, preview: DragChipBitmap | null) => {
+  const handleCardDragOut = async (item: HistoryItem, _preview: DragChipBitmap | null) => {
     if (item.isPrivate) {
       setErrorMsg(tr(locale, "dragOutPrivate"));
       return;
     }
 
-    const chip = preview ? { preview } : {};
+    // Only files and images support native drag-out. Text drags through OLE's
+    // DoDragDrop modal loop, which conflicts with the Tauri webview and causes
+    // hangs or silent failures — so text cards simply cannot be dragged.
+    if (item.contentType !== "file" && item.contentType !== "image") {
+      setErrorMsg(tr(locale, "dragOutTextUnsupported"));
+      return;
+    }
+
     let outcome = "none";
     markTransientWindowInteraction(20000);
     try {
@@ -895,12 +902,10 @@ function MainApp() {
         if (paths.length === 0) throw new Error("No file paths on this item");
         const dropped = await api.nativeDragFile(paths);
         outcome = dropped ? "copy" : "cancelled";
-      } else if (item.contentType === "image") {
+      } else {
         const path = stagedDropPath(item) ?? (await ensureStagedDropPath(item));
         const dropped = await api.nativeDragFile([path]);
         outcome = dropped ? "copy" : "cancelled";
-      } else {
-        outcome = await api.startDragOut({ text: item.content, ...chip });
       }
     } catch (err) {
       setErrorMsg(tr(locale, "dragOutFailed") + String(err));
@@ -908,9 +913,6 @@ function MainApp() {
       markTransientWindowInteraction(400);
     }
 
-    // A drag that lands nowhere used to be silent, which looks exactly like a
-    // drag that never started. Saying so is the difference between a bug report
-    // and a diagnosis.
     if (outcome === "none") {
       setErrorMsg(tr(locale, "dragOutNoTarget"));
     }
