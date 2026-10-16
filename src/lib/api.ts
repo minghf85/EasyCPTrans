@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { HistoryItem, IngestResult, ManagedTag } from "../types";
+import type { AppIconData, HistoryItem, IngestResult, ManagedTag, SourceAppInfo } from "../types";
 import type { Locale } from "./i18n";
 
 // 单一入口封装所有 Rust 命令调用，方便集中替换/Mock。
@@ -26,6 +26,60 @@ export const api = {
   readFiles: () => invoke<{path: string, size: number}[]>("read_clipboard_files"),
 
   getActiveWindow: () => invoke<string>("get_active_window").catch(() => ""),
+
+  /** Foreground window plus its executable, used for the source-app icon. */
+  getActiveWindowInfo: () =>
+    invoke<SourceAppInfo>("get_active_window_info").catch(() => ({
+      title: "",
+      appName: "",
+      appPath: "",
+    })),
+
+  /** Source-application icon as raw RGBA; `null` when the file has none. */
+  getAppIcon: (appPath: string) =>
+    invoke<AppIconData | null>("get_app_icon", { appPath }),
+
+  /**
+   * Starts a native Windows drag. Resolves once the drop completes, with the
+   * resulting effect: `"copy"`, `"move"`, `"cancelled"` or `"none"`.
+   *
+   * `preview` is the drag image as raw RGBA — OLE wants a bitmap, and the canvas
+   * the front-end paints it on is the only rasteriser in the project.
+   */
+  startDragOut: (payload: {
+    text?: string;
+    files?: string[];
+    preview?: { width: number; height: number; rgba: string };
+  }) => invoke<string>("start_drag_out", { payload }),
+
+  /**
+   * Native file drag via the Shell API (vPaste method).
+   * Synchronous — blocks until the drop resolves.
+   * Returns true if dropped, false if cancelled.
+   */
+  nativeDragFile: (paths: string[]) =>
+    invoke<boolean>("native_drag_file", { paths }),
+
+  /**
+   * Runs a regex rule without saving it.
+   *
+   * Compiled by the same crate the ingest pipeline uses, so a pattern that
+   * passes here is one that will compile when a clip is captured. Pass `sample`
+   * to try it against pasted text; omit it to run over the recent history.
+   */
+  previewTagPattern: (pattern: string, ignoreCase: boolean, sample?: string) =>
+    invoke<{
+      matches: string[];
+      total: number;
+      truncated: boolean;
+      segments: Array<{ text: string; matched: boolean }>;
+      scanned: number;
+      skipped: number;
+    }>("preview_tag_pattern", { pattern, ignoreCase, sample: sample ?? null }),
+
+  /** Checks a tag regex before saving, so the editor can reject a bad pattern. */
+  validateTagPattern: (pattern: string, ignoreCase: boolean) =>
+    invoke<void>("validate_tag_pattern", { pattern, ignoreCase }),
 
   isPasteShortcutDown: () => invoke<boolean>("is_paste_shortcut_down").catch(() => false),
 
@@ -66,7 +120,24 @@ export const api = {
   unprotectItem: (id: number, password: string) =>
     invoke<void>("unprotect_item", { id, password }),
 
-  simulatePaste: () => invoke<void>("simulate_paste"),
+  /**
+   * Writes an image item to a temp file and returns its path. Named after the
+   * item id, so calling it repeatedly is cheap and idempotent.
+   */
+  stageImageForDrag: (id: number) => invoke<string>("stage_image_for_drag", { id }),
+
+  /**
+   * Hands focus back to the window the panel was opened from, then sends Ctrl+V.
+   * Passing `hidePanel: false` keeps a pinned panel on screen.
+   *
+   * This is the only paste entry point: sending Ctrl+V without first giving
+   * focus back types into the panel itself.
+   */
+  pasteToPreviousWindow: (hidePanel: boolean) =>
+    invoke<{ sent: boolean; focusMoved: boolean; restoredFocus: boolean }>(
+      "paste_to_previous_window",
+      { hidePanel },
+    ),
 
   translateSelectedText: () => invoke<void>("translate_selected_text"),
 
@@ -131,8 +202,6 @@ export const api = {
 
   generateLanPairingCode: () => invoke<string>("generate_lan_pairing_code_command"),
 
-  getFrequentCommands: (limit = 20) =>
-    invoke<Array<{ id: number; commandText: string; count: number; lastUsedAt: string | null; sourceApps: string[] }>>("get_frequent_commands", { limit }),
 
   getConfig: () =>
     invoke<{
@@ -147,6 +216,7 @@ export const api = {
       itemPinShortcut?: string;
       itemDeleteShortcut?: string;
       itemOcrShortcut?: string;
+      itemZoomShortcut?: string;
       ecdictPath?: string;
       locale?: Locale;
       defaultDir: string;
@@ -192,6 +262,7 @@ export const api = {
     itemPinShortcut?: string;
     itemDeleteShortcut?: string;
     itemOcrShortcut?: string;
+    itemZoomShortcut?: string;
     ecdictPath?: string;
     locale?: Locale;
     autoPaste?: boolean;

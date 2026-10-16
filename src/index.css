@@ -2,12 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
 html,
 body,
 #root {
@@ -17,19 +11,9 @@ body,
 body {
   margin: 0;
   overflow: hidden;
-  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
-  background: #f3f3f3;
-  color: #1a1a1a;
+  /* Windows system UI font: the native face for an enterprise desktop tool. */
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-button,
-input,
-textarea {
-  font: inherit;
-}
-
-button {
-  cursor: pointer;
+  @apply bg-slate-50 text-gray-900;
 }

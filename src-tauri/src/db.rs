@@ -20,6 +20,41 @@ pub fn compute_hash(content_type: &str, content: &str) -> String {
     hex::encode(h.finalize())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_stable_for_the_same_input() {
+        assert_eq!(compute_hash("text", "hello"), compute_hash("text", "hello"));
+    }
+
+    #[test]
+    fn trims_text_but_not_other_content_types() {
+        // Trailing whitespace in copied text should not create a second entry…
+        assert_eq!(compute_hash("text", "  hello  "), compute_hash("text", "hello"));
+        // …but a file path or an image payload is compared verbatim.
+        assert_ne!(compute_hash("file", "C:\\a.txt "), compute_hash("file", "C:\\a.txt"));
+    }
+
+    #[test]
+    fn separates_the_same_payload_across_content_types() {
+        assert_ne!(compute_hash("text", "a"), compute_hash("file", "a"));
+    }
+
+    #[test]
+    fn separates_different_payloads() {
+        assert_ne!(compute_hash("text", "a"), compute_hash("text", "b"));
+    }
+
+    #[test]
+    fn is_a_hex_encoded_sha256_digest() {
+        let hash = compute_hash("text", "hello");
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+}
+
 pub async fn open_pool(db_path: &Path) -> Result<SqlitePool, sqlx::Error> {
     let opts = SqliteConnectOptions::new()
         .filename(db_path)
@@ -84,26 +119,6 @@ pub async fn ensure_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS frequent_commands (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            command_text   TEXT NOT NULL,
-            command_hash   TEXT NOT NULL UNIQUE,
-            count          INTEGER DEFAULT 1,
-            last_used_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
-            source_apps    TEXT,
-            first_seen_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-        )",
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_frequent_commands_count
-         ON frequent_commands(count DESC, last_used_at DESC)",
-    )
-    .execute(pool)
-    .await?;
 
     // Drop the table that backed the removed paste-recommendation feature. It
     // only ever held derived id pairs, so there is nothing of the user's to keep.

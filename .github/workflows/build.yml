@@ -48,6 +48,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Frontend unit tests
+        run: pnpm test
+
       - name: Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 

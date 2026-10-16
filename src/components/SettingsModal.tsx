@@ -1,8 +1,25 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Cloud, Folder, RefreshCw, ScanText, Shield, Terminal, Wifi } from "lucide-react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Cloud, Folder, RefreshCw, ScanText, Shield, Wifi } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
 import { LOCALE_OPTIONS, normalizeLocale, tr, type Locale } from "../lib/i18n";
+import {
+  buttonPrimary,
+  buttonSecondary,
+  checkbox,
+  iconButton,
+  input,
+  select,
+  surface,
+} from "./ui";
 
 interface Props {
   locale: Locale;
@@ -17,9 +34,8 @@ interface Props {
     itemPinShortcut: string;
     itemDeleteShortcut: string;
     itemOcrShortcut: string;
+    itemZoomShortcut: string;
     autoPaste: boolean;
-    keepWindowOpen: boolean;
-    alwaysOnTop: boolean;
     pageSize: number;
     historyLimit: number;
     webdavUrl: string;
@@ -118,6 +134,120 @@ function isModifierKey(key: string) {
   return key === "Control" || key === "Shift" || key === "Alt" || key === "Meta";
 }
 
+/* Shared form primitives. Defining them once keeps every settings card on the
+ * same tokens instead of repeating utility strings a dozen times. */
+
+function Section({
+  title,
+  description,
+  icon,
+  children,
+}: {
+  title: string;
+  description?: string;
+  icon?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className={`${surface} p-6`}>
+      <header className="mb-5">
+        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
+          {icon}
+          {title}
+        </h2>
+        {description && <p className="mt-1 text-sm text-gray-500">{description}</p>}
+      </header>
+      <div className="space-y-4">{children}</div>
+    </section>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-medium text-gray-700">{label}</span>
+      {children}
+      {hint && <span className="mt-1.5 block text-xs text-gray-500">{hint}</span>}
+    </label>
+  );
+}
+
+function CheckRow({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className={`flex items-center gap-2.5 text-sm ${disabled ? "opacity-50" : ""}`}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        className={checkbox}
+      />
+      <span className="font-medium text-gray-700">{label}</span>
+    </label>
+  );
+}
+
+/** Input with a trailing action, used by the path and pairing-code fields. */
+function InputWithAction({
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  action,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: string;
+  action: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className={input}
+      />
+      {action}
+    </div>
+  );
+}
+
+function Message({ children, tone = "muted" }: { children: ReactNode; tone?: "muted" | "warning" }) {
+  return (
+    <p
+      role="status"
+      className={`rounded-lg px-3 py-2 text-sm ${
+        tone === "warning"
+          ? "border border-amber-200 bg-amber-50 text-amber-700"
+          : "text-gray-600"
+      }`}
+    >
+      {children}
+    </p>
+  );
+}
+
 function ShortcutRecorder({
   label,
   value,
@@ -127,6 +257,7 @@ function ShortcutRecorder({
   help,
   locale,
   allowModifierOnly = false,
+  allowBareKey = false,
 }: {
   label: string;
   value: string;
@@ -136,6 +267,8 @@ function ShortcutRecorder({
   help: string;
   locale: Locale;
   allowModifierOnly?: boolean;
+  /** Accept a key with no modifier. Window shortcuts are single letters. */
+  allowBareKey?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [recording, setRecording] = useState(false);
@@ -189,7 +322,7 @@ function ShortcutRecorder({
         setStatus(tr(locale, "shortcutNeedNonModifier"));
         return;
       }
-      if (!nextValue.includes("+")) {
+      if (!allowBareKey && !nextValue.includes("+")) {
         setStatus(tr(locale, "shortcutNeedModifier"));
         return;
       }
@@ -223,13 +356,19 @@ function ShortcutRecorder({
       window.removeEventListener("keydown", handleKeyDown, true);
       window.removeEventListener("mousedown", handlePointerDown, true);
     };
-  }, [recording, allowModifierOnly, onChange, checkAvailability, draftValue, value, locale]);
+  }, [recording, allowModifierOnly, allowBareKey, onChange, checkAvailability, draftValue, value, locale]);
 
   return (
-    <div className="eacptrans-field" ref={rootRef}>
-      <span>{label}</span>
-      <div className="eacptrans-shortcut-recorder">
-        <div className={`eacptrans-shortcut-display ${recording ? "recording" : ""}`}>
+    <div ref={rootRef}>
+      <span className="mb-2 block text-sm font-medium text-gray-700">{label}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        <div
+          className={`min-w-[220px] flex-1 rounded-lg border px-3 py-2 font-mono text-xs transition duration-200 ease-out ${
+            recording
+              ? "border-blue-500 bg-blue-50 text-blue-700 ring-2 ring-blue-500/25"
+              : "border-gray-300 bg-white text-gray-700"
+          }`}
+        >
           {recording
             ? allowModifierOnly
               ? draftValue || tr(locale, "shortcutPressModifierEnter")
@@ -238,7 +377,7 @@ function ShortcutRecorder({
         </div>
         <button
           type="button"
-          className="eacptrans-secondary-btn"
+          className={buttonSecondary}
           onClick={() => {
             setDraftValue("");
             setStatus("");
@@ -247,23 +386,15 @@ function ShortcutRecorder({
         >
           {recording ? tr(locale, "shortcutCancel") : tr(locale, "shortcutRecord")}
         </button>
-        <button
-          type="button"
-          className="eacptrans-secondary-btn"
-          onClick={() => onChange("")}
-        >
+        <button type="button" className={buttonSecondary} onClick={() => onChange("")}>
           {tr(locale, "shortcutClear")}
         </button>
-        <button
-          type="button"
-          className="eacptrans-secondary-btn"
-          onClick={() => onChange(defaultValue)}
-        >
+        <button type="button" className={buttonSecondary} onClick={() => onChange(defaultValue)}>
           {tr(locale, "shortcutDefault")}
         </button>
       </div>
-      <small>{help}</small>
-      {status && <small>{status}</small>}
+      <span className="mt-1.5 block text-xs text-gray-500">{help}</span>
+      {status && <span className="mt-1 block text-xs font-medium text-amber-600">{status}</span>}
     </div>
   );
 }
@@ -281,10 +412,14 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
   const [itemPinShortcut, setItemPinShortcut] = useState("P");
   const [itemDeleteShortcut, setItemDeleteShortcut] = useState("Delete");
   const [itemOcrShortcut, setItemOcrShortcut] = useState("O");
+  const [itemZoomShortcut, setItemZoomShortcut] = useState("Z");
   const [ecdictPath, setEcdictPath] = useState("");
   const [effectiveDir, setEffectiveDir] = useState("");
   const [autoPaste, setAutoPaste] = useState(true);
-  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  // Window pinning is deliberately not mirrored here. It is an immediate toggle
+  // in the header, not a setting: this modal reads the config once on mount, so
+  // a copy of `alwaysOnTop` would go stale the moment the pin was pressed and
+  // saving would then write the old value back over it.
   const [pageSize, setPageSize] = useState(50);
   const [historyLimit, setHistoryLimit] = useState(5000);
   const [webdavUrl, setWebdavUrl] = useState("");
@@ -372,6 +507,10 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
     () => normalizeShortcutValue(itemOcrShortcut, "O"),
     [itemOcrShortcut],
   );
+  const normalizedItemZoomShortcut = useMemo(
+    () => normalizeShortcutValue(itemZoomShortcut, "Z"),
+    [itemZoomShortcut],
+  );
 
   useEffect(() => {
     api
@@ -396,6 +535,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         const nextItemPinShortcut = normalizeShortcutValue(cfg.itemPinShortcut, "P");
         const nextItemDeleteShortcut = normalizeShortcutValue(cfg.itemDeleteShortcut, "Delete");
         const nextItemOcrShortcut = normalizeShortcutValue(cfg.itemOcrShortcut, "O");
+        const nextItemZoomShortcut = normalizeShortcutValue(cfg.itemZoomShortcut, "Z");
         setShortcut(canonicalizeShortcut(nextShortcut));
         setQueueStepShortcut(canonicalizeShortcut(nextQueueStepShortcut));
         setQuickPastePrefix(canonicalizeShortcut(nextQuickPastePrefix));
@@ -429,6 +569,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
             itemPinShortcut: canonicalizeShortcut(nextItemPinShortcut),
             itemDeleteShortcut: canonicalizeShortcut(nextItemDeleteShortcut),
             itemOcrShortcut: canonicalizeShortcut(nextItemOcrShortcut),
+            itemZoomShortcut: canonicalizeShortcut(nextItemZoomShortcut),
           }).catch(console.error);
         }
         setEffectiveDir(cfg.effectiveDir || "");
@@ -449,7 +590,6 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         setLanSyncPairingCode(cfg.lanSyncPairingCode || "");
         setLanSyncPort(typeof cfg.lanSyncPort === "number" ? cfg.lanSyncPort : 0);
         if (typeof cfg.autoPaste === "boolean") setAutoPaste(cfg.autoPaste);
-        if (typeof cfg.alwaysOnTop === "boolean") setAlwaysOnTop(cfg.alwaysOnTop);
         if (typeof cfg.pageSize === "number") setPageSize(cfg.pageSize);
         if (typeof cfg.historyLimit === "number") setHistoryLimit(cfg.historyLimit);
       })
@@ -506,11 +646,10 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         itemPinShortcut: normalizedItemPinShortcut,
         itemDeleteShortcut: normalizedItemDeleteShortcut,
         itemOcrShortcut: normalizedItemOcrShortcut,
+        itemZoomShortcut: normalizedItemZoomShortcut,
         ecdictPath,
         locale: selectedLocale,
         autoPaste,
-        keepWindowOpen: false,
-        alwaysOnTop,
         pageSize,
         historyLimit,
         webdavUrl,
@@ -557,9 +696,8 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
         itemPinShortcut: normalizedItemPinShortcut,
         itemDeleteShortcut: normalizedItemDeleteShortcut,
         itemOcrShortcut: normalizedItemOcrShortcut,
+        itemZoomShortcut: normalizedItemZoomShortcut,
         autoPaste,
-        keepWindowOpen: false,
-        alwaysOnTop,
         pageSize,
         historyLimit,
         webdavUrl,
@@ -707,600 +845,527 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
   useImperativeHandle(ref, () => ({ save: handleSave }));
 
   return (
-    <div className="eacptrans-settings-page eacptrans-page-in">
-      <div className="eacptrans-settings-grid">
-        <section className="eacptrans-settings-card">
-          <div className="eacptrans-settings-head">
-            <h2>{tr(selectedLocale, "settingsGeneral")}</h2>
-            <p>{tr(selectedLocale, "settingsGeneralDesc")}</p>
-          </div>
+    <div className="eacp-animate-fade grid gap-6 pb-2 lg:grid-cols-2">
+      <Section
+        title={tr(selectedLocale, "settingsGeneral")}
+        description={tr(selectedLocale, "settingsGeneralDesc")}
+      >
+        <Field label={tr(selectedLocale, "language")}>
+          <select
+            value={selectedLocale}
+            onChange={(event) => setSelectedLocale(normalizeLocale(event.target.value))}
+            className={select}
+          >
+            {LOCALE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </Field>
 
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "language")}</span>
-            <select
-              value={selectedLocale}
-              onChange={(event) => setSelectedLocale(normalizeLocale(event.target.value))}
-            >
-              {LOCALE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "dataPath")}</span>
-            <div className="eacptrans-path-row">
-              <input
-                type="text"
-                value={cachePath}
-                onChange={(e) => setCachePath(e.target.value)}
-                placeholder={tr(selectedLocale, "dataPathPlaceholder")}
-              />
+        <Field
+          label={tr(selectedLocale, "dataPath")}
+          hint={effectiveDir ? `${tr(selectedLocale, "currentPath")}: ${effectiveDir}` : undefined}
+        >
+          <InputWithAction
+            value={cachePath}
+            onChange={setCachePath}
+            placeholder={tr(selectedLocale, "dataPathPlaceholder")}
+            action={
               <button
                 type="button"
-                className="eacptrans-icon-btn"
+                className={`h-9 w-9 ${iconButton}`}
                 onClick={async () => {
                   const selected = await open({ directory: true, multiple: false });
                   if (selected && typeof selected === "string") setCachePath(selected);
                 }}
                 title={tr(selectedLocale, "chooseFolder")}
+                aria-label={tr(selectedLocale, "chooseFolder")}
               >
-                <Folder className="h-4 w-4" />
+                <Folder className="h-4 w-4" aria-hidden />
               </button>
-            </div>
-            {effectiveDir && <small>{tr(selectedLocale, "currentPath")}: {effectiveDir}</small>}
-          </label>
+            }
+          />
+        </Field>
 
-          <div className="eacptrans-settings-cols">
-            <label className="eacptrans-field">
-              <span>{tr(selectedLocale, "pageSize")}</span>
-              <input
-                type="number"
-                min="10"
-                max="500"
-                value={pageSize}
-                onChange={(e) => setPageSize(parseInt(e.target.value, 10) || 50)}
-              />
-            </label>
-
-            <label className="eacptrans-field">
-              <span>{tr(selectedLocale, "historyLimit")}</span>
-              <input
-                type="number"
-                min="100"
-                max="20000"
-                step="100"
-                value={historyLimit}
-                onChange={(e) => setHistoryLimit(parseInt(e.target.value, 10) || 5000)}
-              />
-            </label>
-          </div>
-
-          <label className="eacptrans-checkrow">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label={tr(selectedLocale, "pageSize")}>
             <input
-              type="checkbox"
-              checked={showMemoryUsage}
-              onChange={(e) => setShowMemoryUsage(e.target.checked)}
+              type="number"
+              min="10"
+              max="500"
+              value={pageSize}
+              onChange={(event) => setPageSize(parseInt(event.target.value, 10) || 50)}
+              className={input}
             />
-            <span>{tr(selectedLocale, "showMemoryUsage")}</span>
-          </label>
-          <p className="eacptrans-settings-note">{tr(selectedLocale, "showMemoryUsageDesc")}</p>
+          </Field>
 
-        </section>
+          <Field label={tr(selectedLocale, "historyLimit")}>
+            <input
+              type="number"
+              min="100"
+              max="20000"
+              step="100"
+              value={historyLimit}
+              onChange={(event) => setHistoryLimit(parseInt(event.target.value, 10) || 5000)}
+              className={input}
+            />
+          </Field>
+        </div>
 
-        <section className="eacptrans-settings-card">
-          <div className="eacptrans-settings-head">
-            <h2>{tr(selectedLocale, "globalShortcuts")}</h2>
-            <p>{tr(selectedLocale, "globalShortcutsDesc")}</p>
-          </div>
+        <CheckRow
+          label={tr(selectedLocale, "showMemoryUsage")}
+          checked={showMemoryUsage}
+          onChange={setShowMemoryUsage}
+        />
+        <p className="text-xs text-gray-500">{tr(selectedLocale, "showMemoryUsageDesc")}</p>
+      </Section>
 
-          <ShortcutRecorder
-            label={tr(selectedLocale, "globalShortcut")}
-            value={shortcut}
-            defaultValue="CommandOrControl+Shift+V"
-            onChange={setShortcut}
-            checkAvailability={api.probeShortcutAvailable}
-            help={tr(selectedLocale, "globalShortcutHelp")}
-            locale={selectedLocale}
-          />
+      <Section
+        title={tr(selectedLocale, "globalShortcuts")}
+        description={tr(selectedLocale, "globalShortcutsDesc")}
+      >
+        <ShortcutRecorder
+          label={tr(selectedLocale, "globalShortcut")}
+          value={shortcut}
+          defaultValue="CommandOrControl+Shift+V"
+          onChange={setShortcut}
+          checkAvailability={api.probeShortcutAvailable}
+          help={tr(selectedLocale, "globalShortcutHelp")}
+          locale={selectedLocale}
+        />
 
-          <ShortcutRecorder
-            label={tr(selectedLocale, "queueStepShortcut")}
-            value={queueStepShortcut}
-            defaultValue="CommandOrControl+Alt+V"
-            onChange={setQueueStepShortcut}
-            checkAvailability={api.probeShortcutAvailable}
-            help={tr(selectedLocale, "queueStepShortcutHelp")}
-            locale={selectedLocale}
-          />
+        <ShortcutRecorder
+          label={tr(selectedLocale, "queueStepShortcut")}
+          value={queueStepShortcut}
+          defaultValue="CommandOrControl+Alt+V"
+          onChange={setQueueStepShortcut}
+          checkAvailability={api.probeShortcutAvailable}
+          help={tr(selectedLocale, "queueStepShortcutHelp")}
+          locale={selectedLocale}
+        />
 
-          <ShortcutRecorder
-            label={tr(selectedLocale, "quickPastePrefix")}
-            value={quickPastePrefix}
-            defaultValue="CommandOrControl+Shift"
-            onChange={setQuickPastePrefix}
-            help={tr(selectedLocale, "quickPastePrefixHelp")}
-            locale={selectedLocale}
-            allowModifierOnly
-          />
+        <ShortcutRecorder
+          label={tr(selectedLocale, "quickPastePrefix")}
+          value={quickPastePrefix}
+          defaultValue="CommandOrControl+Shift"
+          onChange={setQuickPastePrefix}
+          help={tr(selectedLocale, "quickPastePrefixHelp")}
+          locale={selectedLocale}
+          allowModifierOnly
+        />
 
-          <ShortcutRecorder
-            label={tr(selectedLocale, "stackShortcutPrefix")}
-            value={stackShortcutPrefix}
-            defaultValue="CommandOrControl+Alt"
-            onChange={setStackShortcutPrefix}
-            help={tr(selectedLocale, "stackShortcutPrefixHelp")}
-            locale={selectedLocale}
-            allowModifierOnly
-          />
+        <ShortcutRecorder
+          label={tr(selectedLocale, "stackShortcutPrefix")}
+          value={stackShortcutPrefix}
+          defaultValue="CommandOrControl+Alt"
+          onChange={setStackShortcutPrefix}
+          help={tr(selectedLocale, "stackShortcutPrefixHelp")}
+          locale={selectedLocale}
+          allowModifierOnly
+        />
 
-          <ShortcutRecorder
-            label={tr(selectedLocale, "wordTranslateShortcut")}
-            value={wordTranslateShortcut}
-            defaultValue="Alt+C"
-            onChange={setWordTranslateShortcut}
-            checkAvailability={api.probeShortcutAvailable}
-            help={tr(selectedLocale, "wordTranslateShortcutHelp")}
-            locale={selectedLocale}
-          />
+        <ShortcutRecorder
+          label={tr(selectedLocale, "wordTranslateShortcut")}
+          value={wordTranslateShortcut}
+          defaultValue="Alt+C"
+          onChange={setWordTranslateShortcut}
+          checkAvailability={api.probeShortcutAvailable}
+          help={tr(selectedLocale, "wordTranslateShortcutHelp")}
+          locale={selectedLocale}
+        />
 
-          {quickPastePrefixWarning && <div className="eacptrans-settings-msg">{quickPastePrefixWarning}</div>}
-        </section>
+        {quickPastePrefixWarning && <Message tone="warning">{quickPastePrefixWarning}</Message>}
+      </Section>
 
-        <section className="eacptrans-settings-card">
-          <div className="eacptrans-settings-head">
-            <h2>{tr(selectedLocale, "selectedItemKeys")}</h2>
-            <p>{tr(selectedLocale, "selectedItemKeysDesc")}</p>
-          </div>
+      <Section
+        title={tr(selectedLocale, "selectedItemKeys")}
+        description={tr(selectedLocale, "selectedItemKeysDesc")}
+      >
+        <ShortcutRecorder
+          label={tr(selectedLocale, "selectedItemTag")}
+          value={itemTagShortcut}
+          defaultValue="T"
+          onChange={setItemTagShortcut}
+          help={tr(selectedLocale, "selectedItemTagHelp")}
+          locale={selectedLocale}
+          allowBareKey
+        />
 
-          <ShortcutRecorder
-            label={tr(selectedLocale, "selectedItemTag")}
-            value={itemTagShortcut}
-            defaultValue="T"
-            onChange={setItemTagShortcut}
-            help={tr(selectedLocale, "selectedItemTagHelp")}
-            locale={selectedLocale}
-          />
+        <ShortcutRecorder
+          label={tr(selectedLocale, "selectedItemPrivate")}
+          value={itemPrivateShortcut}
+          defaultValue="M"
+          onChange={setItemPrivateShortcut}
+          help={tr(selectedLocale, "selectedItemPrivateHelp")}
+          locale={selectedLocale}
+          allowBareKey
+        />
 
-          <ShortcutRecorder
-            label={tr(selectedLocale, "selectedItemPrivate")}
-            value={itemPrivateShortcut}
-            defaultValue="M"
-            onChange={setItemPrivateShortcut}
-            help={tr(selectedLocale, "selectedItemPrivateHelp")}
-            locale={selectedLocale}
-          />
+        <ShortcutRecorder
+          label={tr(selectedLocale, "selectedItemPin")}
+          value={itemPinShortcut}
+          defaultValue="P"
+          onChange={setItemPinShortcut}
+          help={tr(selectedLocale, "selectedItemPinHelp")}
+          locale={selectedLocale}
+          allowBareKey
+        />
 
-          <ShortcutRecorder
-            label={tr(selectedLocale, "selectedItemPin")}
-            value={itemPinShortcut}
-            defaultValue="P"
-            onChange={setItemPinShortcut}
-            help={tr(selectedLocale, "selectedItemPinHelp")}
-            locale={selectedLocale}
-          />
+        <ShortcutRecorder
+          label={tr(selectedLocale, "selectedItemDelete")}
+          value={itemDeleteShortcut}
+          defaultValue="Delete"
+          onChange={setItemDeleteShortcut}
+          help={tr(selectedLocale, "selectedItemDeleteHelp")}
+          locale={selectedLocale}
+          allowBareKey
+        />
 
-          <ShortcutRecorder
-            label={tr(selectedLocale, "selectedItemDelete")}
-            value={itemDeleteShortcut}
-            defaultValue="Delete"
-            onChange={setItemDeleteShortcut}
-            help={tr(selectedLocale, "selectedItemDeleteHelp")}
-            locale={selectedLocale}
-          />
+        <ShortcutRecorder
+          label={tr(selectedLocale, "ocrShortcut")}
+          value={itemOcrShortcut}
+          defaultValue="O"
+          onChange={setItemOcrShortcut}
+          help={tr(selectedLocale, "ocrShortcutHelp")}
+          locale={selectedLocale}
+          allowBareKey
+        />
 
-          <ShortcutRecorder
-            label={tr(selectedLocale, "ocrShortcut")}
-            value={itemOcrShortcut}
-            defaultValue="O"
-            onChange={setItemOcrShortcut}
-            help={tr(selectedLocale, "ocrShortcutHelp")}
-            locale={selectedLocale}
-          />
-        </section>
+        <ShortcutRecorder
+          label={tr(selectedLocale, "zoomShortcut")}
+          value={itemZoomShortcut}
+          defaultValue="Z"
+          onChange={setItemZoomShortcut}
+          help={tr(selectedLocale, "zoomShortcutHelp")}
+          locale={selectedLocale}
+          allowBareKey
+        />
+      </Section>
 
-        <section className="eacptrans-settings-card">
-          <div className="eacptrans-settings-head">
-            <h2>{tr(selectedLocale, "translation")}</h2>
-            <p>{tr(selectedLocale, "translationDesc")}</p>
-          </div>
-
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "ecdictPath")}</span>
-            <div className="eacptrans-path-row">
-              <input
-                type="text"
-                value={ecdictPath}
-                onChange={(e) => setEcdictPath(e.target.value)}
-                placeholder={tr(selectedLocale, "ecdictPathPlaceholder")}
-              />
+      <Section
+        title={tr(selectedLocale, "translation")}
+        description={tr(selectedLocale, "translationDesc")}
+      >
+        <Field label={tr(selectedLocale, "ecdictPath")} hint={tr(selectedLocale, "ecdictPathHelp")}>
+          <InputWithAction
+            value={ecdictPath}
+            onChange={setEcdictPath}
+            placeholder={tr(selectedLocale, "ecdictPathPlaceholder")}
+            action={
               <button
                 type="button"
-                className="eacptrans-icon-btn"
+                className={`h-9 w-9 ${iconButton}`}
                 onClick={async () => {
                   const selected = await open({ directory: false, multiple: false });
                   if (selected && typeof selected === "string") setEcdictPath(selected);
                 }}
                 title={tr(selectedLocale, "chooseEcdictFile")}
+                aria-label={tr(selectedLocale, "chooseEcdictFile")}
               >
-                <Folder className="h-4 w-4" />
+                <Folder className="h-4 w-4" aria-hidden />
               </button>
-            </div>
-            <small>{tr(selectedLocale, "ecdictPathHelp")}</small>
-          </label>
-        </section>
+            }
+          />
+        </Field>
+      </Section>
 
-        <section className="eacptrans-settings-card">
-          <div className="eacptrans-settings-head">
-            <h2>
-              <Cloud className="h-4 w-4" />
-              WebDAV
-            </h2>
-            <p>{tr(selectedLocale, "webdavDesc")}</p>
-          </div>
+      <Section
+        title="WebDAV"
+        description={tr(selectedLocale, "webdavDesc")}
+        icon={<Cloud className="h-5 w-5 text-blue-600" aria-hidden />}
+      >
+        <CheckRow
+          label={tr(selectedLocale, "enableWebdav")}
+          checked={webdavSyncEnabled}
+          onChange={setWebdavSyncEnabled}
+        />
 
-          <label className="eacptrans-checkrow">
-            <input
-              type="checkbox"
-              checked={webdavSyncEnabled}
-              onChange={(e) => setWebdavSyncEnabled(e.target.checked)}
-            />
-            <span>{tr(selectedLocale, "enableWebdav")}</span>
-          </label>
+        <Field label={tr(selectedLocale, "webdavUrl")}>
+          <input
+            type="text"
+            value={webdavUrl}
+            onChange={(event) => setWebdavUrl(event.target.value)}
+            placeholder={tr(selectedLocale, "webdavUrlPlaceholder")}
+            className={input}
+          />
+        </Field>
 
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "webdavUrl")}</span>
-            <input
-              type="text"
-              value={webdavUrl}
-              onChange={(e) => setWebdavUrl(e.target.value)}
-              placeholder={tr(selectedLocale, "webdavUrlPlaceholder")}
-            />
-          </label>
+        <Field label={tr(selectedLocale, "username")}>
+          <input
+            type="text"
+            value={webdavUsername}
+            onChange={(event) => setWebdavUsername(event.target.value)}
+            className={input}
+          />
+        </Field>
 
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "username")}</span>
-            <input type="text" value={webdavUsername} onChange={(e) => setWebdavUsername(e.target.value)} />
-          </label>
+        <Field label={tr(selectedLocale, "password")}>
+          <input
+            type="password"
+            value={webdavPassword}
+            onChange={(event) => setWebdavPassword(event.target.value)}
+            placeholder={tr(selectedLocale, "webdavPasswordPlaceholder")}
+            className={input}
+          />
+        </Field>
 
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "password")}</span>
-            <input
-              type="password"
-              value={webdavPassword}
-              onChange={(e) => setWebdavPassword(e.target.value)}
-              placeholder={tr(selectedLocale, "webdavPasswordPlaceholder")}
-            />
-          </label>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            className={buttonSecondary}
+            onClick={() => void handleVerifyWebdav()}
+            disabled={webdavBusy || !webdavUrl.trim() || !webdavUsername.trim()}
+          >
+            {webdavBusy ? tr(selectedLocale, "checking") : tr(selectedLocale, "verifyWebdav")}
+          </button>
+          <button
+            type="button"
+            className={buttonPrimary}
+            onClick={() => void handleSyncNow()}
+            disabled={webdavBusy || !webdavSyncEnabled || !webdavUrl.trim() || !webdavUsername.trim()}
+          >
+            {webdavBusy && <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden />}
+            {webdavBusy ? tr(selectedLocale, "syncing") : tr(selectedLocale, "syncNow")}
+          </button>
+        </div>
 
-          <div className="eacptrans-settings-actions">
-            <button
-              type="button"
-              className="eacptrans-secondary-btn"
-              onClick={() => void handleVerifyWebdav()}
-              disabled={webdavBusy || !webdavUrl.trim() || !webdavUsername.trim()}
-            >
-              {webdavBusy ? tr(selectedLocale, "checking") : tr(selectedLocale, "verifyWebdav")}
-            </button>
-            <button
-              type="button"
-              className="eacptrans-primary-btn"
-              onClick={() => void handleSyncNow()}
-              disabled={webdavBusy || !webdavSyncEnabled || !webdavUrl.trim() || !webdavUsername.trim()}
-            >
-              {webdavBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : null}
-              {webdavBusy ? tr(selectedLocale, "syncing") : tr(selectedLocale, "syncNow")}
-            </button>
-          </div>
-          {webdavMessage && <span className="eacptrans-settings-msg">{webdavMessage}</span>}
-        </section>
+        {webdavMessage && <Message>{webdavMessage}</Message>}
+      </Section>
 
-        <section className="eacptrans-settings-card">
-          <div className="eacptrans-settings-head">
-            <h2>
-              <span className="text-base">🌐</span>
-              {tr(selectedLocale, "apiTranslation")}
-            </h2>
-            <p>{tr(selectedLocale, "apiTranslationDesc")}</p>
-          </div>
+      <Section
+        title={tr(selectedLocale, "apiTranslation")}
+        description={tr(selectedLocale, "apiTranslationDesc")}
+      >
+        <CheckRow
+          label={tr(selectedLocale, "enableApiTranslation")}
+          checked={apiTranslateEnabled}
+          onChange={setApiTranslateEnabled}
+        />
 
-          <label className="eacptrans-checkrow">
-            <input
-              type="checkbox"
-              checked={apiTranslateEnabled}
-              onChange={(e) => setApiTranslateEnabled(e.target.checked)}
-            />
-            <span>{tr(selectedLocale, "enableApiTranslation")}</span>
-          </label>
+        <Field label={tr(selectedLocale, "apiBaseUrl")}>
+          <input
+            type="text"
+            value={apiTranslateBaseUrl}
+            onChange={(event) => setApiTranslateBaseUrl(event.target.value)}
+            placeholder="https://api.openai.com/v1"
+            className={input}
+          />
+        </Field>
 
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "apiBaseUrl")}</span>
-            <input
-              type="text"
-              value={apiTranslateBaseUrl}
-              onChange={(e) => setApiTranslateBaseUrl(e.target.value)}
-              placeholder="https://api.openai.com/v1"
-            />
-          </label>
+        <Field label={tr(selectedLocale, "apiKey")}>
+          <input
+            type="password"
+            value={apiTranslateKey}
+            onChange={(event) => setApiTranslateKey(event.target.value)}
+            placeholder={tr(selectedLocale, "apiKeyPlaceholder")}
+            className={input}
+          />
+        </Field>
 
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "apiKey")}</span>
-            <input
-              type="password"
-              value={apiTranslateKey}
-              onChange={(e) => setApiTranslateKey(e.target.value)}
-              placeholder={tr(selectedLocale, "apiKeyPlaceholder")}
-            />
-          </label>
+        <Field label={tr(selectedLocale, "apiModel")}>
+          <input
+            type="text"
+            value={apiTranslateModel}
+            onChange={(event) => setApiTranslateModel(event.target.value)}
+            placeholder="gpt-4o-mini"
+            className={input}
+          />
+        </Field>
 
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "apiModel")}</span>
-            <input
-              type="text"
-              value={apiTranslateModel}
-              onChange={(e) => setApiTranslateModel(e.target.value)}
-              placeholder="gpt-4o-mini"
-            />
-          </label>
+        <Field label={tr(selectedLocale, "apiTargetLang")}>
+          <input
+            type="text"
+            value={apiTranslateTargetLang}
+            onChange={(event) => setApiTranslateTargetLang(event.target.value)}
+            placeholder={tr(selectedLocale, "apiTargetLangPlaceholder")}
+            className={input}
+          />
+        </Field>
+      </Section>
 
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "apiTargetLang")}</span>
-            <input
-              type="text"
-              value={apiTranslateTargetLang}
-              onChange={(e) => setApiTranslateTargetLang(e.target.value)}
-              placeholder={tr(selectedLocale, "apiTargetLangPlaceholder")}
-            />
-          </label>
-        </section>
+      <Section
+        title={tr(selectedLocale, "ocrSettings")}
+        description={tr(selectedLocale, "ocrSettingsDesc")}
+        icon={<ScanText className="h-5 w-5 text-blue-600" aria-hidden />}
+      >
+        <CheckRow
+          label={tr(selectedLocale, "ocrEnable")}
+          checked={ocrEnabled}
+          onChange={setOcrEnabled}
+        />
 
-        <section className="eacptrans-settings-card">
-          <div className="eacptrans-settings-head">
-            <h2>
-              <Terminal className="h-4 w-4" />
-              {tr(selectedLocale, "frequentCommands")}
-            </h2>
-            <p>{tr(selectedLocale, "frequentCommandsDesc")}</p>
-          </div>
+        <CheckRow
+          label={tr(selectedLocale, "ocrAuto")}
+          checked={ocrAuto}
+          disabled={!ocrEnabled}
+          onChange={setOcrAuto}
+        />
+        <p className="text-xs text-gray-500">{tr(selectedLocale, "ocrAutoDesc")}</p>
 
-          <div className="eacptrans-settings-peer-list">
-            <FrequentCommandsList locale={selectedLocale} />
-          </div>
-        </section>
+        <Field
+          label={tr(selectedLocale, "ocrLanguage")}
+          hint={
+            ocrLanguages.length === 0
+              ? tr(selectedLocale, "ocrNoLanguagePack")
+              : `${tr(selectedLocale, "ocrInstalledLanguages")}: ${ocrLanguages
+                  .map((entry) => entry.tag)
+                  .join(", ")}`
+          }
+        >
+          <select
+            value={ocrLanguage}
+            disabled={!ocrEnabled}
+            onChange={(event) => setOcrLanguage(event.target.value)}
+            className={select}
+          >
+            <option value="">{tr(selectedLocale, "ocrLanguageAuto")}</option>
+            {ocrLanguages.map((entry) => (
+              <option key={entry.tag} value={entry.tag}>
+                {entry.name} ({entry.tag})
+              </option>
+            ))}
+          </select>
+        </Field>
+      </Section>
 
-        <section className="eacptrans-settings-card">
-          <div className="eacptrans-settings-head">
-            <h2>
-              <ScanText className="h-4 w-4" />
-              {tr(selectedLocale, "ocrSettings")}
-            </h2>
-            <p>{tr(selectedLocale, "ocrSettingsDesc")}</p>
-          </div>
+      <Section
+        title={tr(selectedLocale, "lanSync")}
+        description={tr(selectedLocale, "lanSyncDesc")}
+        icon={<Wifi className="h-5 w-5 text-blue-600" aria-hidden />}
+      >
+        <CheckRow
+          label={tr(selectedLocale, "enableLanSync")}
+          checked={lanSyncEnabled}
+          onChange={setLanSyncEnabled}
+        />
 
-          <label className="eacptrans-checkrow">
-            <input
-              type="checkbox"
-              checked={ocrEnabled}
-              onChange={(e) => setOcrEnabled(e.target.checked)}
-            />
-            <span>{tr(selectedLocale, "ocrEnable")}</span>
-          </label>
-
-          <label className="eacptrans-checkrow">
-            <input
-              type="checkbox"
-              checked={ocrAuto}
-              disabled={!ocrEnabled}
-              onChange={(e) => setOcrAuto(e.target.checked)}
-            />
-            <span>{tr(selectedLocale, "ocrAuto")}</span>
-          </label>
-          <p className="eacptrans-settings-note">{tr(selectedLocale, "ocrAutoDesc")}</p>
-
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "ocrLanguage")}</span>
-            <select
-              value={ocrLanguage}
-              disabled={!ocrEnabled}
-              onChange={(event) => setOcrLanguage(event.target.value)}
-            >
-              <option value="">{tr(selectedLocale, "ocrLanguageAuto")}</option>
-              {ocrLanguages.map((entry) => (
-                <option key={entry.tag} value={entry.tag}>
-                  {entry.name} ({entry.tag})
-                </option>
-              ))}
-            </select>
-            <small>
-              {ocrLanguages.length === 0
-                ? tr(selectedLocale, "ocrNoLanguagePack")
-                : `${tr(selectedLocale, "ocrInstalledLanguages")}: ${ocrLanguages
-                    .map((entry) => entry.tag)
-                    .join(", ")}`}
-            </small>
-          </label>
-        </section>
-
-        <section className="eacptrans-settings-card">
-          <div className="eacptrans-settings-head">
-            <h2>
-              <Wifi className="h-4 w-4" />
-              {tr(selectedLocale, "lanSync")}
-            </h2>
-            <p>{tr(selectedLocale, "lanSyncDesc")}</p>
-          </div>
-
-          <label className="eacptrans-checkrow">
-            <input
-              type="checkbox"
-              checked={lanSyncEnabled}
-              onChange={(e) => setLanSyncEnabled(e.target.checked)}
-            />
-            <span>{tr(selectedLocale, "enableLanSync")}</span>
-          </label>
-
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "lanSyncPairingCode")}</span>
-            <div className="eacptrans-path-row">
-              <input
-                type="text"
-                value={lanSyncPairingCode}
-                onChange={(e) => setLanSyncPairingCode(e.target.value)}
-                placeholder="AB12CD"
-              />
+        <Field label={tr(selectedLocale, "lanSyncPairingCode")} hint={tr(selectedLocale, "lanSyncPairingCodeHelp")}>
+          <InputWithAction
+            value={lanSyncPairingCode}
+            onChange={setLanSyncPairingCode}
+            placeholder="AB12CD"
+            action={
               <button
                 type="button"
-                className="eacptrans-secondary-btn"
+                className={buttonSecondary}
                 onClick={() => void handleGenerateLanPairingCode()}
               >
                 {tr(selectedLocale, "lanSyncGenerateCode")}
               </button>
-            </div>
-            <small>{tr(selectedLocale, "lanSyncPairingCodeHelp")}</small>
-          </label>
+            }
+          />
+        </Field>
 
-          <label className="eacptrans-field">
-            <span>{tr(selectedLocale, "lanSyncPort")}</span>
-            <input
-              type="number"
-              min="0"
-              max="65535"
-              value={lanSyncPort}
-              onChange={(e) => setLanSyncPort(parseInt(e.target.value, 10) || 0)}
-              placeholder={tr(selectedLocale, "lanSyncPortPlaceholder")}
-            />
-          </label>
+        <Field label={tr(selectedLocale, "lanSyncPort")}>
+          <input
+            type="number"
+            min="0"
+            max="65535"
+            value={lanSyncPort}
+            onChange={(event) => setLanSyncPort(parseInt(event.target.value, 10) || 0)}
+            placeholder={tr(selectedLocale, "lanSyncPortPlaceholder")}
+            className={input}
+          />
+        </Field>
 
-          <div className="eacptrans-settings-actions">
-            <button
-              type="button"
-              className="eacptrans-primary-btn"
-              onClick={() => void handleLanSyncNow()}
-              disabled={lanSyncBusy}
-            >
-              {lanSyncBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : null}
-              {lanSyncBusy ? tr(selectedLocale, "lanSyncSyncing") : tr(selectedLocale, "lanSyncSyncNow")}
-            </button>
-          </div>
+        <button
+          type="button"
+          className={buttonPrimary}
+          onClick={() => void handleLanSyncNow()}
+          disabled={lanSyncBusy}
+        >
+          {lanSyncBusy && <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden />}
+          {lanSyncBusy ? tr(selectedLocale, "lanSyncSyncing") : tr(selectedLocale, "lanSyncSyncNow")}
+        </button>
 
-          {lanSyncListening && (
-            <small>
-              {tr(selectedLocale, "lanSyncListeningOn")} {lanSyncPort || "auto"}
-            </small>
+        {lanSyncListening && (
+          <p className="text-xs text-gray-500">
+            {tr(selectedLocale, "lanSyncListeningOn")} {lanSyncPort || "auto"}
+          </p>
+        )}
+
+        <div className={`${surface} p-4`}>
+          <p className="text-sm font-semibold text-gray-900">{tr(selectedLocale, "lanSyncPeers")}</p>
+          {lanSyncPeers.length === 0 ? (
+            <p className="mt-1 text-xs text-gray-500">{tr(selectedLocale, "lanSyncNoPeers")}</p>
+          ) : (
+            <ul className="mt-2 space-y-1">
+              {lanSyncPeers.map((peer) => (
+                <li key={`${peer.host}:${peer.port}`} className="font-mono text-xs text-gray-600">
+                  {peer.name} — {peer.addresses.join(", ")}:{peer.port}
+                </li>
+              ))}
+            </ul>
           )}
+        </div>
 
-          <div className="eacptrans-settings-peer-list">
-            <strong>{tr(selectedLocale, "lanSyncPeers")}</strong>
-            {lanSyncPeers.length === 0 ? (
-              <span>{tr(selectedLocale, "lanSyncNoPeers")}</span>
-            ) : (
-              <ul>
-                {lanSyncPeers.map((peer) => (
-                  <li key={`${peer.host}:${peer.port}`}>
-                    {peer.name} — {peer.addresses.join(", ")}:{peer.port}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          {lanSyncMessage && <span className="eacptrans-settings-msg">{lanSyncMessage}</span>}
-        </section>
+        {lanSyncMessage && <Message>{lanSyncMessage}</Message>}
+      </Section>
 
-        <section className="eacptrans-settings-card eacptrans-settings-card-wide">
-          <div className="eacptrans-settings-head">
-            <h2>
-              <Shield className="h-4 w-4" />
-              {tr(selectedLocale, "privacy")}
-            </h2>
-            <p>
-              {tr(selectedLocale, "privacyStatusPassword")}:{" "}
-              {privacyStatus.passwordSet ? tr(selectedLocale, "configured") : tr(selectedLocale, "notConfigured")} ·{" "}
-              {tr(selectedLocale, "privacyStatusQuestion")}:{" "}
-              {privacyStatus.securityQuestionSet ? tr(selectedLocale, "configured") : tr(selectedLocale, "notConfigured")} ·{" "}
-              {tr(selectedLocale, "privacyStatusPrivateItems")}:{" "}
-              {privacyStatus.privateItems}
-            </p>
-          </div>
-
+      <div className="lg:col-span-2">
+        <Section
+          title={tr(selectedLocale, "privacy")}
+          description={`${tr(selectedLocale, "privacyStatusPassword")}: ${
+            privacyStatus.passwordSet ? tr(selectedLocale, "configured") : tr(selectedLocale, "notConfigured")
+          } · ${tr(selectedLocale, "privacyStatusQuestion")}: ${
+            privacyStatus.securityQuestionSet ? tr(selectedLocale, "configured") : tr(selectedLocale, "notConfigured")
+          } · ${tr(selectedLocale, "privacyStatusPrivateItems")}: ${privacyStatus.privateItems}`}
+          icon={<Shield className="h-5 w-5 text-blue-600" aria-hidden />}
+        >
           {privacyStatus.passwordSet && (
-            <label className="eacptrans-field">
-              <span>{tr(selectedLocale, "currentPassword")}</span>
-              <input type="password" value={privacyCurrent} onChange={(e) => setPrivacyCurrent(e.target.value)} />
-            </label>
+            <Field label={tr(selectedLocale, "currentPassword")}>
+              <input
+                type="password"
+                value={privacyCurrent}
+                onChange={(event) => setPrivacyCurrent(event.target.value)}
+                className={input}
+              />
+            </Field>
           )}
 
-          <div className="eacptrans-settings-cols">
-            <label className="eacptrans-field">
-              <span>{tr(selectedLocale, "newPassword")}</span>
-              <input type="password" value={privacyNew} onChange={(e) => setPrivacyNew(e.target.value)} />
-            </label>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label={tr(selectedLocale, "newPassword")}>
+              <input
+                type="password"
+                value={privacyNew}
+                onChange={(event) => setPrivacyNew(event.target.value)}
+                className={input}
+              />
+            </Field>
 
-            <label className="eacptrans-field">
-              <span>{tr(selectedLocale, "confirmPassword")}</span>
-              <input type="password" value={privacyConfirm} onChange={(e) => setPrivacyConfirm(e.target.value)} />
-            </label>
+            <Field label={tr(selectedLocale, "confirmPassword")}>
+              <input
+                type="password"
+                value={privacyConfirm}
+                onChange={(event) => setPrivacyConfirm(event.target.value)}
+                className={input}
+              />
+            </Field>
+
+            <Field label={tr(selectedLocale, "securityQuestion")}>
+              <input
+                type="text"
+                value={securityQuestion}
+                onChange={(event) => setSecurityQuestion(event.target.value)}
+                className={input}
+              />
+            </Field>
+
+            <Field label={tr(selectedLocale, "securityAnswer")}>
+              <input
+                type="password"
+                value={securityAnswer}
+                onChange={(event) => setSecurityAnswer(event.target.value)}
+                className={input}
+              />
+            </Field>
           </div>
 
-          <div className="eacptrans-settings-cols">
-            <label className="eacptrans-field">
-              <span>{tr(selectedLocale, "securityQuestion")}</span>
-              <input type="text" value={securityQuestion} onChange={(e) => setSecurityQuestion(e.target.value)} />
-            </label>
-
-            <label className="eacptrans-field">
-              <span>{tr(selectedLocale, "securityAnswer")}</span>
-              <input type="password" value={securityAnswer} onChange={(e) => setSecurityAnswer(e.target.value)} />
-            </label>
-          </div>
-
-          {privacyMessage && <span className="eacptrans-settings-msg">{privacyMessage}</span>}
-        </section>
+          {privacyMessage && <Message>{privacyMessage}</Message>}
+        </Section>
       </div>
     </div>
   );
 });
-
-function FrequentCommandsList({ locale }: { locale: Locale }) {
-  const [commands, setCommands] = useState<Array<{ id: number; commandText: string; count: number }>>([]);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setBusy(true);
-    api
-      .getFrequentCommands(10)
-      .then((items) => {
-        if (cancelled) return;
-        setCommands(items.map((item) => ({ id: item.id, commandText: item.commandText, count: item.count })));
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setBusy(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (busy) {
-    return <span className="eacptrans-settings-msg">{tr(locale, "checking")}</span>;
-  }
-
-  if (commands.length === 0) {
-    return <span>{tr(locale, "noFrequentCommands")}</span>;
-  }
-
-  return (
-    <ul className="eacptrans-settings-peer-list">
-      {commands.map((cmd) => (
-        <li key={cmd.id} className="eacptrans-flex-row">
-          <Terminal className="h-3.5 w-3.5" />
-          <code className="eacptrans-code-inline">{cmd.commandText}</code>
-          <span className="eacptrans-meta-count">×{cmd.count}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}

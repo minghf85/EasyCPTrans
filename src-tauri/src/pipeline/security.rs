@@ -39,3 +39,39 @@ impl Interceptor for SecurityFilter {
         InterceptResult::Continue
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source_app: Option<&str>) -> InterceptResult {
+        let mut item = ClipboardItem::new("text", "hunter2");
+        item.source_app = source_app.map(|app| app.to_string());
+        SecurityFilter::default().intercept(&mut item)
+    }
+
+    fn is_blocked(source_app: &str) -> bool {
+        matches!(run(Some(source_app)), InterceptResult::Stop(_))
+    }
+
+    #[test]
+    fn blocks_the_password_managers_on_the_list() {
+        // The guard is the first thing a secret has to get past, so the match
+        // must not depend on the exact window title or casing.
+        assert!(is_blocked("1Password"));
+        assert!(is_blocked("vault - 1PASSWORD"));
+        assert!(is_blocked("KeePassXC"));
+        assert!(is_blocked("Bitwarden — Unlock"));
+    }
+
+    #[test]
+    fn allows_an_ordinary_source_app() {
+        assert!(!is_blocked("notes.txt - Notepad"));
+        assert!(!is_blocked("Google Chrome"));
+    }
+
+    #[test]
+    fn allows_an_item_with_no_source_app() {
+        assert!(matches!(run(None), InterceptResult::Continue));
+    }
+}

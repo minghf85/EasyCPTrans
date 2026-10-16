@@ -57,3 +57,68 @@ impl Interceptor for RegexExtractor {
         InterceptResult::Continue
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extract(content_type: &str, content: &str) -> ClipboardItem {
+        let mut item = ClipboardItem::new(content_type, content);
+        RegexExtractor.intercept(&mut item);
+        item
+    }
+
+    #[test]
+    fn collects_emails_once_each_in_first_seen_order() {
+        let item = extract(
+            "text",
+            "write to dev@example.com, then ops@example.com, then dev@example.com again",
+        );
+
+        assert_eq!(
+            item.metadata.get("emails").unwrap(),
+            &vec!["dev@example.com".to_string(), "ops@example.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn collects_urls() {
+        let item = extract("text", "see https://example.com/a and http://b.test/x");
+
+        assert_eq!(
+            item.metadata.get("urls").unwrap(),
+            &vec!["https://example.com/a".to_string(), "http://b.test/x".to_string()]
+        );
+    }
+
+    #[test]
+    fn collects_a_formatted_phone_number() {
+        let item = extract("text", "reach me on 010-12345678 tomorrow");
+
+        assert_eq!(
+            item.metadata.get("phones").unwrap(),
+            &vec!["010-12345678".to_string()]
+        );
+    }
+
+    #[test]
+    fn short_digit_runs_are_not_phone_numbers() {
+        assert!(!extract("text", "order 12345 shipped").metadata.contains_key("phones"));
+    }
+
+    #[test]
+    fn writes_no_key_when_nothing_was_found() {
+        let item = extract("text", "just an ordinary sentence");
+
+        assert!(item.metadata.is_empty());
+    }
+
+    #[test]
+    fn leaves_non_text_content_alone() {
+        // Image payloads are data URLs and file payloads are paths; running the
+        // text patterns over them would only produce noise.
+        let image = extract("image", "data:image/png;base64,aHR0cHM6Ly9leGFtcGxlLmNvbQ==");
+
+        assert!(image.metadata.is_empty());
+    }
+}

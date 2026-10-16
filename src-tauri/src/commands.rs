@@ -1,5 +1,4 @@
 use crate::db::{compute_hash, AppState};
-use sqlx::SqlitePool;
 use crate::pipeline::{ClipboardItem, Pipeline, PipelineOutcome};
 use crate::privacy::{
     decrypt_content, encrypt_content, has_password, has_security_question, load_privacy_config,
@@ -7,16 +6,34 @@ use crate::privacy::{
 };
 use base64::Engine;
 use serde::{Deserialize, Deserializer, Serialize};
-use sqlx::Row;
+use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const PRIVATE_TAG: &str = "Private";
 const PINNED_TAG: &str = "Pinned";
-static ECDICT_CSV_CACHE: once_cell::sync::Lazy<
-    std::sync::Mutex<HashMap<PathBuf, HashMap<String, DictionaryEntry>>>,
-> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// TTL for dictionary caches: 5 minutes of inactivity before eviction.
+const DICT_CACHE_TTL_SECS: u64 = 300;
+
+struct CachedDictData {
+    entries: HashMap<String, DictionaryEntry>,
+    last_access: Instant,
+}
+
+struct DictCacheState {
+    csv_cache: std::sync::Mutex<HashMap<PathBuf, CachedDictData>>,
+    sqlite_pools: std::sync::Mutex<HashMap<PathBuf, Arc<SqlitePool>>>,
+}
+
+static DICT_CACHE: once_cell::sync::Lazy<DictCacheState> =
+    once_cell::sync::Lazy::new(|| DictCacheState {
+        csv_cache: std::sync::Mutex::new(HashMap::new()),
+        sqlite_pools: std::sync::Mutex::new(HashMap::new()),
+    });
 
 fn is_privacy_tag(tag: &str) -> bool {
     let normalized = tag.trim().to_lowercase();
@@ -102,65 +119,6 @@ pub(crate) fn merge_unique_tags(existing: Vec<String>, incoming: Vec<String>) ->
     result
 }
 
-pub(crate) async fn record_frequent_commands(
-    pool: &SqlitePool,
-    commands: &[String],
-    source_app: Option<&str>,
-) -> Result<(), sqlx::Error> {
-    let source_apps_json = source_app.map(|app| {
-        serde_json::to_string(&vec![app.to_string()]).unwrap_or_else(|_| "[]".into())
-    });
-
-    for command in commands {
-        let normalized = command.trim();
-        if normalized.is_empty() || normalized.len() > 800 {
-            continue;
-        }
-        let hash = crate::db::compute_hash("command", normalized);
-
-        let existing: Option<String> = sqlx::query_scalar(
-            "SELECT source_apps FROM frequent_commands WHERE command_hash = ?1",
-        )
-        .bind(&hash)
-        .fetch_optional(pool)
-        .await?;
-
-        if let Some(existing_json) = existing {
-            let mut apps: Vec<String> =
-                serde_json::from_str(&existing_json).unwrap_or_default();
-            if let Some(app) = source_app {
-                let app_clean = app.to_string();
-                if !apps.iter().any(|a| a.eq_ignore_ascii_case(&app_clean)) {
-                    apps.push(app_clean);
-                }
-            }
-            let apps_json = serde_json::to_string(&apps).unwrap_or_else(|_| "[]".into());
-            sqlx::query(
-                "UPDATE frequent_commands
-                 SET count = count + 1,
-                     last_used_at = CURRENT_TIMESTAMP,
-                     source_apps = ?1
-                 WHERE command_hash = ?2",
-            )
-            .bind(&apps_json)
-            .bind(&hash)
-            .execute(pool)
-            .await?;
-        } else {
-            sqlx::query(
-                "INSERT INTO frequent_commands
-                    (command_text, command_hash, count, source_apps)
-                 VALUES (?1, ?2, 1, ?3)",
-            )
-            .bind(normalized)
-            .bind(&hash)
-            .bind(source_apps_json.as_deref())
-            .execute(pool)
-            .await?;
-        }
-    }
-    Ok(())
-}
 
 fn data_url_byte_len(value: &str) -> Option<usize> {
     let encoded = value.split_once(',')?.1.trim();
@@ -235,6 +193,17 @@ pub struct ManagedTagConfig {
     pub color: String,
     #[serde(default)]
     pub system: bool,
+    /// Regex source. When set, this tag becomes a rule tag: any clipboard item
+    /// whose content matches is tagged automatically.
+    #[serde(default)]
+    pub pattern: Option<String>,
+    /// Match `pattern` case-insensitively.
+    #[serde(default)]
+    pub ignore_case: bool,
+    /// Keep every match on the item so the card can show them as a stack the
+    /// user can drag out into separate cards.
+    #[serde(default)]
+    pub extract: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -255,6 +224,9 @@ fn normalize_managed_tags(items: Vec<ManagedTagConfigInput>) -> Vec<ManagedTagCo
                 common: false,
                 color: default_tag_color(),
                 system: false,
+                pattern: None,
+                ignore_case: false,
+                extract: false,
             },
             ManagedTagConfigInput::Full(tag) => tag,
         };
@@ -264,16 +236,251 @@ fn normalize_managed_tags(items: Vec<ManagedTagConfigInput>) -> Vec<ManagedTagCo
         }
         let key = tag.id.clone().unwrap_or_else(|| cleaned.to_lowercase());
         if seen.insert(key) {
+            let pattern = normalize_tag_pattern(tag.pattern);
             normalized.push(ManagedTagConfig {
                 id: tag.id,
                 name: cleaned.to_string(),
                 common: tag.common,
                 color: normalize_tag_color(&tag.color),
                 system: tag.system,
+                ignore_case: pattern.is_some() && tag.ignore_case,
+                // Extraction without a pattern has nothing to extract from.
+                extract: pattern.is_some() && tag.extract,
+                pattern,
             });
         }
     }
     normalized
+}
+
+fn normalize_tag_pattern(value: Option<String>) -> Option<String> {
+    let trimmed = value?.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Checks a user-supplied pattern before it is saved, so the tag editor can
+/// reject a bad expression instead of silently never matching.
+#[tauri::command]
+pub fn validate_tag_pattern(pattern: String, ignore_case: bool) -> Result<(), String> {
+    let trimmed = pattern.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    let source = if ignore_case {
+        format!("(?i){trimmed}")
+    } else {
+        trimmed.to_string()
+    };
+    regex::Regex::new(&source)
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
+/// One run of a rule, as the tag editor's live preview sees it.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagPatternPreview {
+    /// Distinct matches, first-seen order, capped exactly like the pipeline caps
+    /// them so the count the editor shows is the count a card would show.
+    pub matches: Vec<String>,
+    /// How many matched before the cap.
+    pub total: usize,
+    pub truncated: bool,
+    /// A pasted sample, cut into plain and matched runs so the editor can
+    /// highlight it without doing byte-offset arithmetic in JavaScript.
+    pub segments: Vec<TagPatternSegment>,
+    /// Items the rule was run against, and items whose content type carries no
+    /// text to read.
+    pub scanned: usize,
+    pub skipped: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagPatternSegment {
+    pub text: String,
+    pub matched: bool,
+}
+
+/// How much history the "try it on real items" run reads.
+const PREVIEW_HISTORY_LIMIT: i64 = 200;
+/// Cap on the highlighted runs, so a pattern that matches every character does
+/// not build a hundred thousand of them.
+const PREVIEW_SEGMENT_LIMIT: usize = 400;
+
+/// Runs a pattern without saving it.
+///
+/// Compiled with the same crate the ingest pipeline uses, so "it compiles here"
+/// and "it compiles at ingest" cannot drift apart — the editor can therefore
+/// reject a pattern instead of silently never matching.
+#[tauri::command]
+pub async fn preview_tag_pattern(
+    state: State<'_, AppState>,
+    pattern: String,
+    ignore_case: bool,
+    sample: Option<String>,
+) -> Result<TagPatternPreview, String> {
+    let trimmed = pattern.trim();
+    if trimmed.is_empty() {
+        return Ok(TagPatternPreview::default());
+    }
+
+    let source = if ignore_case {
+        format!("(?i){trimmed}")
+    } else {
+        trimmed.to_string()
+    };
+    let regex = regex::Regex::new(&source).map_err(|err| err.to_string())?;
+
+    match sample {
+        Some(text) => Ok(preview_sample(&regex, &text)),
+        None => preview_history(&state.pool, &regex).await,
+    }
+}
+
+fn preview_sample(regex: &regex::Regex, text: &str) -> TagPatternPreview {
+    let (matches, total) = crate::pipeline::tag_rules::collect_matches(regex, text);
+
+    TagPatternPreview {
+        truncated: total > matches.len(),
+        matches,
+        total,
+        segments: segment_sample(regex, text),
+        scanned: 1,
+        skipped: 0,
+    }
+}
+
+/// The sample as alternating plain and matched runs, first-seen order.
+fn segment_sample(regex: &regex::Regex, text: &str) -> Vec<TagPatternSegment> {
+    let mut segments: Vec<TagPatternSegment> = Vec::new();
+    let mut cursor = 0usize;
+
+    for found in regex.find_iter(text) {
+        if segments.len() >= PREVIEW_SEGMENT_LIMIT {
+            break;
+        }
+        // `find_iter` only reports character boundaries, so these slices cannot
+        // split one — which is why the highlight is computed here and not in JS.
+        if found.start() > cursor {
+            segments.push(TagPatternSegment {
+                text: text[cursor..found.start()].to_string(),
+                matched: false,
+            });
+        }
+        segments.push(TagPatternSegment {
+            text: found.as_str().to_string(),
+            matched: true,
+        });
+        cursor = found.end();
+    }
+
+    if cursor < text.len() && segments.len() < PREVIEW_SEGMENT_LIMIT {
+        segments.push(TagPatternSegment {
+            text: text[cursor..].to_string(),
+            matched: false,
+        });
+    }
+    segments
+}
+
+/// Runs the rule over the most recent history, which is what it would have seen
+/// had it been saved before those items were copied.
+async fn preview_history(
+    pool: &SqlitePool,
+    regex: &regex::Regex,
+) -> Result<TagPatternPreview, String> {
+    let rows = sqlx::query(
+        "SELECT content_type, content, metadata FROM clipboard_items
+         ORDER BY is_pinned DESC, last_used_at DESC, id DESC
+         LIMIT ?1",
+    )
+    .bind(PREVIEW_HISTORY_LIMIT)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut matches: Vec<String> = Vec::new();
+    let mut total = 0usize;
+    let mut scanned = 0usize;
+    let mut skipped = 0usize;
+
+    for row in rows {
+        let item = crate::pipeline::ClipboardItem {
+            content_type: row.try_get("content_type").unwrap_or_default(),
+            content: row.try_get("content").unwrap_or_default(),
+            source_app: None,
+            metadata: parse_metadata(row.try_get("metadata").ok()),
+            tags: Vec::new(),
+        };
+
+        // The same content rule the pipeline uses, so what the editor counts is
+        // what it would actually tag.
+        let Some(source) = crate::pipeline::tag_rules::scan_source(&item) else {
+            skipped += 1;
+            continue;
+        };
+        scanned += 1;
+
+        let (found, count) = crate::pipeline::tag_rules::collect_matches(regex, &source);
+        total += count;
+        for value in found {
+            if !matches.contains(&value) {
+                matches.push(value);
+            }
+        }
+    }
+
+    let truncated = matches.len() > crate::pipeline::tag_rules::MAX_STORED_MATCHES;
+    matches.truncate(crate::pipeline::tag_rules::MAX_STORED_MATCHES);
+
+    Ok(TagPatternPreview {
+        matches,
+        total,
+        truncated,
+        segments: Vec::new(),
+        scanned,
+        skipped,
+    })
+}
+
+/// Compiles the config's rule tags. Invalid patterns are skipped rather than
+/// failing the whole ingest — the tag editor rejects them up front, but a
+/// hand-edited `config.json` should not break clipboard capture.
+pub(crate) fn tag_rules_from_config(config: &AppConfig) -> Vec<crate::pipeline::tag_rules::TagRule> {
+    config
+        .managed_tags
+        .iter()
+        .filter_map(|tag| {
+            // Normalised rather than read straight through: a hand-edited
+            // config.json with a blank pattern would otherwise compile into a
+            // rule that matches any run of spaces.
+            let pattern = normalize_tag_pattern(tag.pattern.clone())?;
+            let source = if tag.ignore_case {
+                format!("(?i){pattern}")
+            } else {
+                pattern
+            };
+            match regex::Regex::new(&source) {
+                Ok(regex) => Some(crate::pipeline::tag_rules::TagRule {
+                    name: tag.name.clone(),
+                    regex,
+                    extract: tag.extract,
+                }),
+                Err(err) => {
+                    println!(
+                        "[EasyCPTrans] tag rule '{}' has an invalid pattern: {}",
+                        tag.name, err
+                    );
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 fn default_tag_color() -> String {
@@ -282,7 +489,10 @@ fn default_tag_color() -> String {
 
 fn normalize_tag_color(value: &str) -> String {
     let trimmed = value.trim();
-    if trimmed.starts_with('#') && (trimmed.len() == 7 || trimmed.len() == 4) {
+    let digits = trimmed.strip_prefix('#');
+    let valid = matches!(digits.map(str::len), Some(3) | Some(6))
+        && digits.is_some_and(|hex| hex.chars().all(|c| c.is_ascii_hexdigit()));
+    if valid {
         return trimmed.to_string();
     }
     default_tag_color()
@@ -314,49 +524,7 @@ pub(crate) fn read_app_config<R: tauri::Runtime>(app: &AppHandle<R>) -> AppConfi
             return normalize_app_config(conf);
         }
     }
-    normalize_app_config(AppConfig {
-        cache_path: "".to_string(),
-        shortcut: "CommandOrControl+Shift+V".to_string(),
-        plain_paste_shortcut: default_plain_paste_shortcut(),
-        queue_step_shortcut: default_queue_step_shortcut(),
-        quick_paste_prefix: default_quick_paste_prefix(),
-        stack_shortcut_prefix: default_stack_shortcut_prefix(),
-        word_translate_shortcut: default_word_translate_shortcut(),
-        item_tag_shortcut: default_item_tag_shortcut(),
-        item_private_shortcut: default_item_private_shortcut(),
-        item_pin_shortcut: default_item_pin_shortcut(),
-        item_delete_shortcut: default_item_delete_shortcut(),
-        item_ocr_shortcut: default_item_ocr_shortcut(),
-        ecdict_path: String::new(),
-        locale: default_locale(),
-        auto_paste: true,
-        keep_window_open: false,
-        always_on_top: false,
-        page_size: 50,
-        history_limit: 5000,
-        webdav_url: "".to_string(),
-        webdav_username: "".to_string(),
-        webdav_password: "".to_string(),
-        webdav_sync_enabled: false,
-        device_name: default_device_name(),
-        api_translate_enabled: false,
-        api_translate_base_url: "".to_string(),
-        api_translate_key: "".to_string(),
-        api_translate_model: default_api_translate_model(),
-        api_translate_target_lang: "".to_string(),
-        lan_sync_enabled: false,
-        lan_sync_pairing_code: "".to_string(),
-        lan_sync_port: 0,
-        ocr_enabled: true,
-        ocr_auto: true,
-        ocr_language: String::new(),
-        show_memory_usage: false,
-        managed_tags: Vec::new(),
-        window_width: None,
-        window_height: None,
-        window_x: None,
-        window_y: None,
-    })
+    normalize_app_config(AppConfig::default())
 }
 
 pub(crate) async fn emit_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
@@ -665,14 +833,24 @@ async fn lookup_ecdict_sqlite(path: &Path, query: &str) -> Result<Option<Diction
         query
     );
     let started = std::time::Instant::now();
-    let options = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(path)
-        .read_only(true);
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .map_err(|err| err.to_string())?;
+
+    let pool = {
+        let mut pools = DICT_CACHE.sqlite_pools.lock().map_err(|e| e.to_string())?;
+        pools
+            .entry(path.to_path_buf())
+            .or_insert_with(|| {
+                let options = sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(path)
+                    .read_only(true);
+                Arc::new(
+                    sqlx::sqlite::SqlitePoolOptions::new()
+                        .max_connections(1)
+                        .connect_lazy_with(options),
+                )
+            })
+            .clone()
+    };
+
     let normalized = query.to_ascii_lowercase();
     let stripped = strip_word(query);
     let row = sqlx::query(
@@ -684,7 +862,7 @@ async fn lookup_ecdict_sqlite(path: &Path, query: &str) -> Result<Option<Diction
     )
     .bind(&normalized)
     .bind(&stripped)
-    .fetch_optional(&pool)
+    .fetch_optional(pool.as_ref())
     .await
     .map_err(|err| err.to_string())?;
 
@@ -723,33 +901,67 @@ fn lookup_ecdict_csv(path: &Path, query: &str) -> Result<Option<DictionaryEntry>
         query
     );
     let started = std::time::Instant::now();
-    if let Ok(mut cache) = ECDICT_CSV_CACHE.lock() {
-        if !cache.contains_key(path) {
-            println!(
-                "[EasyCPTrans] ECDICT csv cache loading: path={}",
-                path.display()
-            );
-            let data = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
-            let mut entries = HashMap::new();
-            for (index, line) in data.lines().enumerate() {
-                if index == 0 {
-                    continue;
-                }
-                let columns = split_csv_line(line);
-                let Some(entry) = dictionary_entry_from_columns(&columns) else {
-                    continue;
-                };
-                entries.insert(entry.word.to_ascii_lowercase(), entry.clone());
-                entries.entry(strip_word(&entry.word)).or_insert(entry);
-            }
-            cache.insert(path.to_path_buf(), entries);
-        }
-        if let Some(entries) = cache.get(path) {
+
+    if let Ok(mut cache) = DICT_CACHE.csv_cache.lock() {
+        // Evict stale entries
+        cache.retain(|_, v| v.last_access.elapsed().as_secs() < DICT_CACHE_TTL_SECS);
+
+        let cached = cache.get_mut(path);
+        if let Some(cached) = cached {
+            cached.last_access = Instant::now();
             let normalized = query.trim().to_ascii_lowercase();
             let stripped = strip_word(query);
-            let entry = entries
+            let entry = cached
+                .entries
                 .get(&normalized)
-                .or_else(|| entries.get(&stripped))
+                .or_else(|| cached.entries.get(&stripped))
+                .cloned();
+            println!(
+                "[EasyCPTrans] ECDICT csv lookup finish: path={}, query={}, hit={}, elapsed_ms={}",
+                path.display(),
+                query,
+                entry
+                    .as_ref()
+                    .map(|entry| entry.word.as_str())
+                    .unwrap_or("<none>"),
+                started.elapsed().as_millis()
+            );
+            return Ok(entry);
+        }
+
+        // Cache miss — load and cache
+        println!(
+            "[EasyCPTrans] ECDICT csv cache loading: path={}",
+            path.display()
+        );
+        let data = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
+        let mut entries = HashMap::new();
+        for (index, line) in data.lines().enumerate() {
+            if index == 0 {
+                continue;
+            }
+            let columns = split_csv_line(line);
+            let Some(entry) = dictionary_entry_from_columns(&columns) else {
+                continue;
+            };
+            entries.insert(entry.word.to_ascii_lowercase(), entry.clone());
+            entries.entry(strip_word(&entry.word)).or_insert(entry);
+        }
+        cache.insert(
+            path.to_path_buf(),
+            CachedDictData {
+                entries,
+                last_access: Instant::now(),
+            },
+        );
+
+        if let Some(cached) = cache.get(path) {
+            let normalized = query.trim().to_ascii_lowercase();
+            let stripped = strip_word(query);
+            let entry = cached
+                .entries
+                .get(&normalized)
+                .or_else(|| cached.entries.get(&stripped))
                 .cloned();
             println!(
                 "[EasyCPTrans] ECDICT csv lookup finish: path={}, query={}, hit={}, elapsed_ms={}",
@@ -765,6 +977,7 @@ fn lookup_ecdict_csv(path: &Path, query: &str) -> Result<Option<DictionaryEntry>
         }
     }
 
+    // Fallback: direct read without caching
     let data = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
     let normalized = query.trim().to_ascii_lowercase();
     let stripped = strip_word(query);
@@ -1015,7 +1228,7 @@ pub async fn ingest_clipboard(
         metadata,
         tags: Vec::new(),
     };
-    let mut processed = match Pipeline::default().run(raw) {
+    let mut processed = match Pipeline::with_tag_rules(tag_rules_from_config(&app_config)).run(raw) {
         PipelineOutcome::Accepted(item) => item,
         PipelineOutcome::Dropped {
             interceptor,
@@ -1113,12 +1326,6 @@ pub async fn ingest_clipboard(
         );
         (new_id, false)
     };
-
-    if let Some(commands) = processed.metadata.get("commands") {
-        record_frequent_commands(pool, commands, processed.source_app.as_deref())
-            .await
-            .map_err(|e| e.to_string())?;
-    }
 
     emit_changed(&app).await;
 
@@ -1251,51 +1458,6 @@ pub async fn load_history(
 pub struct TextItemDetail {
     pub id: i64,
     pub content: String,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct FrequentCommand {
-    pub id: i64,
-    pub command_text: String,
-    pub count: i64,
-    pub last_used_at: Option<String>,
-    pub source_apps: Vec<String>,
-}
-
-#[tauri::command]
-pub async fn get_frequent_commands(
-    state: State<'_, AppState>,
-    limit: Option<i64>,
-) -> Result<Vec<FrequentCommand>, String> {
-    let limit = limit.unwrap_or(20).clamp(1, 200);
-    let rows = sqlx::query(
-        "SELECT id, command_text, count, last_used_at, source_apps
-         FROM frequent_commands
-         ORDER BY count DESC, last_used_at DESC
-         LIMIT ?1",
-    )
-    .bind(limit)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let items = rows
-        .into_iter()
-        .map(|row| FrequentCommand {
-            id: row.get("id"),
-            command_text: row.try_get("command_text").unwrap_or_default(),
-            count: row.try_get("count").unwrap_or(0),
-            last_used_at: row.try_get("last_used_at").ok(),
-            source_apps: row
-                .try_get::<Option<String>, _>("source_apps")
-                .ok()
-                .flatten()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default(),
-        })
-        .collect();
-    Ok(items)
 }
 
 #[tauri::command]
@@ -2318,11 +2480,11 @@ pub async fn is_paste_shortcut_down() -> Result<bool, String> {
     }
 }
 
-#[tauri::command]
-pub async fn save_temp_image(app: AppHandle, data_url: String) -> Result<String, String> {
+/// Splits an image data URL into the file extension to stage it under and the
+/// decoded bytes.
+fn decode_image_data_url(data_url: &str) -> Result<(&str, Vec<u8>), String> {
     let (header, encoded) = data_url
         .split_once(',')
-        .map(|(header, value)| (header, value))
         .ok_or_else(|| "invalid data url".to_string())?;
     let extension = if header.contains("image/jpeg") {
         "jpg"
@@ -2340,6 +2502,67 @@ pub async fn save_temp_image(app: AppHandle, data_url: String) -> Result<String,
         .decode(encoded)
         .map_err(|e| e.to_string())?;
 
+    Ok((extension, bytes))
+}
+
+/// Writes bytes to `path` through a `.part` sibling, so a reader never sees a
+/// half-written file.
+fn write_atomically(path: &std::path::Path, bytes: &[u8], extension: &str) -> Result<(), String> {
+    let partial_path = path.with_extension(format!("{extension}.part"));
+    std::fs::write(&partial_path, bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&partial_path, path).map_err(|e| e.to_string())
+}
+
+/// Stages an image item as a temporary file so a drag-out can start without any
+/// further round trips.
+///
+/// Named after the item id rather than the clock: the id comes from an
+/// `AUTOINCREMENT` column and is never reused, so one image is written once no
+/// matter how often it is dragged, and the front-end can key its cache on the id.
+/// The previous flow fetched the whole image as a data URL, decoded it and only
+/// then entered the drag loop — by which point the button was usually released.
+#[tauri::command]
+pub async fn stage_image_for_drag(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<String, String> {
+    let row = sqlx::query(
+        "SELECT storage_path, is_private FROM clipboard_items WHERE id = ?1 AND content_type = 'image' LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "Image item not found.".to_string())?;
+
+    if row.try_get::<i64, _>("is_private").unwrap_or(0) != 0 {
+        return Err("This item is private. Unlock it before dragging it out.".to_string());
+    }
+
+    let data_url: String = row.try_get("storage_path").unwrap_or_default();
+    let (extension, bytes) = decode_image_data_url(&data_url)?;
+
+    let temp_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("temp");
+    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+    let image_path = temp_dir.join(format!("drag-{id}.{extension}"));
+    if image_path.exists() {
+        return Ok(image_path.to_string_lossy().to_string());
+    }
+    write_atomically(&image_path, &bytes, extension)?;
+
+    Ok(image_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn save_temp_image(app: AppHandle, data_url: String) -> Result<String, String> {
+    let (extension, bytes) = decode_image_data_url(&data_url)?;
+
     let temp_dir = app
         .path()
         .app_data_dir()
@@ -2353,9 +2576,7 @@ pub async fn save_temp_image(app: AppHandle, data_url: String) -> Result<String,
         extension
     );
     let image_path = temp_dir.join(filename);
-    let partial_path = image_path.with_extension(format!("{}.part", extension));
-    std::fs::write(&partial_path, bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&partial_path, &image_path).map_err(|e| e.to_string())?;
+    write_atomically(&image_path, &bytes, extension)?;
 
     Ok(image_path.to_string_lossy().to_string())
 }
@@ -2402,10 +2623,10 @@ pub async fn read_image_as_data_url(path: String) -> Result<String, String> {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    #[serde(default)]
     pub cache_path: String,
+    #[serde(default = "default_shortcut")]
     pub shortcut: String,
-    #[serde(default = "default_plain_paste_shortcut")]
-    pub plain_paste_shortcut: String,
     #[serde(default = "default_queue_step_shortcut")]
     pub queue_step_shortcut: String,
     #[serde(default = "default_quick_paste_prefix")]
@@ -2424,6 +2645,8 @@ pub struct AppConfig {
     pub item_delete_shortcut: String,
     #[serde(default = "default_item_ocr_shortcut")]
     pub item_ocr_shortcut: String,
+    #[serde(default = "default_item_zoom_shortcut")]
+    pub item_zoom_shortcut: String,
     #[serde(default)]
     pub ecdict_path: String,
     #[serde(default = "default_locale")]
@@ -2484,11 +2707,64 @@ pub struct AppConfig {
     pub window_y: Option<f64>,
 }
 
+/// The configuration an installation starts from.
+///
+/// Spelled out once, here. It used to be written out again in
+/// `read_app_config` and in `sync::parse_config`, so a new field had to be added
+/// in three places and silently lost its default in the other two.
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            cache_path: String::new(),
+            shortcut: default_shortcut(),
+            queue_step_shortcut: default_queue_step_shortcut(),
+            quick_paste_prefix: default_quick_paste_prefix(),
+            stack_shortcut_prefix: default_stack_shortcut_prefix(),
+            word_translate_shortcut: default_word_translate_shortcut(),
+            item_tag_shortcut: default_item_tag_shortcut(),
+            item_private_shortcut: default_item_private_shortcut(),
+            item_pin_shortcut: default_item_pin_shortcut(),
+            item_delete_shortcut: default_item_delete_shortcut(),
+            item_ocr_shortcut: default_item_ocr_shortcut(),
+            item_zoom_shortcut: default_item_zoom_shortcut(),
+            ecdict_path: String::new(),
+            locale: default_locale(),
+            auto_paste: default_auto_paste(),
+            keep_window_open: default_keep_window_open(),
+            always_on_top: default_bool_false(),
+            page_size: default_page_size(),
+            history_limit: default_history_limit(),
+            webdav_url: String::new(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
+            webdav_sync_enabled: default_bool_false(),
+            device_name: default_device_name(),
+            api_translate_enabled: default_bool_false(),
+            api_translate_base_url: String::new(),
+            api_translate_key: String::new(),
+            api_translate_model: default_api_translate_model(),
+            api_translate_target_lang: String::new(),
+            lan_sync_enabled: default_bool_false(),
+            lan_sync_pairing_code: String::new(),
+            lan_sync_port: 0,
+            ocr_enabled: true,
+            ocr_auto: true,
+            ocr_language: String::new(),
+            show_memory_usage: default_bool_false(),
+            managed_tags: Vec::new(),
+            window_width: None,
+            window_height: None,
+            window_x: None,
+            window_y: None,
+        }
+    }
+}
+
 fn default_auto_paste() -> bool {
     true
 }
-fn default_plain_paste_shortcut() -> String {
-    "Super+Alt+V".to_string()
+fn default_shortcut() -> String {
+    "CommandOrControl+Shift+V".to_string()
 }
 fn default_queue_step_shortcut() -> String {
     "CommandOrControl+Alt+V".to_string()
@@ -2516,6 +2792,9 @@ fn default_item_delete_shortcut() -> String {
 }
 fn default_item_ocr_shortcut() -> String {
     "O".to_string()
+}
+fn default_item_zoom_shortcut() -> String {
+    "Z".to_string()
 }
 fn default_locale() -> String {
     "zh-CN".to_string()
@@ -2623,7 +2902,6 @@ async fn sync_device_identity_rename<R: tauri::Runtime>(
 pub struct ConfigResponse {
     pub cache_path: String,
     pub shortcut: String,
-    pub plain_paste_shortcut: String,
     pub queue_step_shortcut: String,
     pub quick_paste_prefix: String,
     pub stack_shortcut_prefix: String,
@@ -2633,6 +2911,7 @@ pub struct ConfigResponse {
     pub item_pin_shortcut: String,
     pub item_delete_shortcut: String,
     pub item_ocr_shortcut: String,
+    pub item_zoom_shortcut: String,
     pub ecdict_path: String,
     pub locale: String,
     pub default_dir: String,
@@ -2671,7 +2950,6 @@ pub struct ConfigResponse {
 pub struct PartialAppConfig {
     pub cache_path: Option<String>,
     pub shortcut: Option<String>,
-    pub plain_paste_shortcut: Option<String>,
     pub queue_step_shortcut: Option<String>,
     pub quick_paste_prefix: Option<String>,
     pub stack_shortcut_prefix: Option<String>,
@@ -2681,6 +2959,7 @@ pub struct PartialAppConfig {
     pub item_pin_shortcut: Option<String>,
     pub item_delete_shortcut: Option<String>,
     pub item_ocr_shortcut: Option<String>,
+    pub item_zoom_shortcut: Option<String>,
     pub ecdict_path: Option<String>,
     pub locale: Option<String>,
     pub auto_paste: Option<bool>,
@@ -2727,7 +3006,6 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
     Ok(ConfigResponse {
         cache_path: conf.cache_path,
         shortcut: conf.shortcut,
-        plain_paste_shortcut: conf.plain_paste_shortcut,
         queue_step_shortcut: conf.queue_step_shortcut,
         quick_paste_prefix: conf.quick_paste_prefix,
         stack_shortcut_prefix: conf.stack_shortcut_prefix,
@@ -2737,6 +3015,7 @@ pub async fn get_config(app: AppHandle) -> Result<ConfigResponse, String> {
         item_pin_shortcut: conf.item_pin_shortcut,
         item_delete_shortcut: conf.item_delete_shortcut,
         item_ocr_shortcut: conf.item_ocr_shortcut,
+        item_zoom_shortcut: conf.item_zoom_shortcut,
         ecdict_path: conf.ecdict_path,
         locale: conf.locale,
         default_dir,
@@ -2783,9 +3062,6 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
     if let Some(value) = config.shortcut {
         merged.shortcut = value;
     }
-    if let Some(value) = config.plain_paste_shortcut {
-        merged.plain_paste_shortcut = value;
-    }
     if let Some(value) = config.queue_step_shortcut {
         merged.queue_step_shortcut = value;
     }
@@ -2812,6 +3088,9 @@ pub async fn set_config(app: AppHandle, config: PartialAppConfig) -> Result<(), 
     }
     if let Some(value) = config.item_ocr_shortcut {
         merged.item_ocr_shortcut = value;
+    }
+    if let Some(value) = config.item_zoom_shortcut {
+        merged.item_zoom_shortcut = value;
     }
     if let Some(value) = config.ecdict_path {
         merged.ecdict_path = value;
@@ -2970,4 +3249,184 @@ pub async fn rename_device_tag(app: AppHandle, from: String, to: String) -> Resu
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(name: &str, pattern: Option<&str>) -> ManagedTagConfig {
+        ManagedTagConfig {
+            id: None,
+            name: name.to_string(),
+            common: false,
+            color: default_tag_color(),
+            system: false,
+            pattern: pattern.map(|value| value.to_string()),
+            ignore_case: false,
+            extract: false,
+        }
+    }
+
+    fn config_with_tags(tags: Vec<ManagedTagConfig>) -> AppConfig {
+        let mut config: AppConfig =
+            serde_json::from_str(r#"{"cachePath":"","shortcut":"","managedTags":[]}"#).unwrap();
+        config.managed_tags = tags;
+        config
+    }
+
+    #[test]
+    fn parse_metadata_tolerates_missing_or_broken_json() {
+        assert!(parse_metadata(None).is_empty());
+        assert!(parse_metadata(Some("not json".into())).is_empty());
+
+        let parsed = parse_metadata(Some(r#"{"urls":["https://example.com"]}"#.into()));
+        assert_eq!(parsed.get("urls").unwrap(), &vec!["https://example.com".to_string()]);
+    }
+
+    #[test]
+    fn merge_unique_tags_trims_and_dedupes_case_insensitively() {
+        let merged = merge_unique_tags(
+            vec!["Work".into(), "  ".into()],
+            vec!["work".into(), "Urgent".into(), "Work".into()],
+        );
+
+        // The first spelling wins and order is preserved.
+        assert_eq!(merged, vec!["Work".to_string(), "Urgent".to_string()]);
+    }
+
+    #[test]
+    fn normalize_tag_pattern_treats_blank_as_absent() {
+        assert_eq!(normalize_tag_pattern(None), None);
+        assert_eq!(normalize_tag_pattern(Some("".into())), None);
+        assert_eq!(normalize_tag_pattern(Some("   ".into())), None);
+        assert_eq!(normalize_tag_pattern(Some("  #\\w+ ".into())), Some("#\\w+".into()));
+    }
+
+    #[test]
+    fn normalize_tag_color_only_accepts_hex_shorthands() {
+        assert_eq!(normalize_tag_color("#aabbcc"), "#aabbcc");
+        assert_eq!(normalize_tag_color("  #abc  "), "#abc");
+
+        for rejected in ["", "red", "aabbcc", "#aabbccdd", "#xyz"] {
+            assert_eq!(normalize_tag_color(rejected), DEFAULT_TAG_COLOR, "{rejected}");
+        }
+    }
+
+    #[test]
+    fn normalize_managed_tags_dedupes_by_id_first_entry_wins() {
+        let mut first = tag("Work", None);
+        first.id = Some("custom-1".into());
+        let mut renamed = tag("Work renamed", None);
+        renamed.id = Some("custom-1".into());
+
+        let normalized = normalize_managed_tags(vec![
+            ManagedTagConfigInput::Full(first),
+            ManagedTagConfigInput::Full(renamed),
+            ManagedTagConfigInput::Full(tag("  ", None)),
+        ]);
+
+        // A tag that carries an id is identified by it, so the duplicate is
+        // dropped and the blank name never reaches the config.
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].name, "Work");
+    }
+
+    #[test]
+    fn normalize_managed_tags_dedupes_id_less_tags_by_name() {
+        let normalized = normalize_managed_tags(vec![
+            ManagedTagConfigInput::Name("Work".into()),
+            ManagedTagConfigInput::Name("work".into()),
+            ManagedTagConfigInput::Name("Urgent".into()),
+        ]);
+
+        assert_eq!(normalized.len(), 2);
+        assert_eq!(normalized[0].name, "Work");
+        assert_eq!(normalized[1].name, "Urgent");
+    }
+
+    #[test]
+    fn normalize_managed_tags_accepts_the_legacy_name_form() {
+        let normalized = normalize_managed_tags(vec![
+            ManagedTagConfigInput::Name("  Legacy  ".into()),
+            ManagedTagConfigInput::Name("".into()),
+        ]);
+
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].name, "Legacy");
+        assert_eq!(normalized[0].color, DEFAULT_TAG_COLOR);
+        assert!(!normalized[0].common);
+        assert!(normalized[0].pattern.is_none());
+    }
+
+    #[test]
+    fn a_rule_needs_a_pattern_before_it_can_extract_or_ignore_case() {
+        let mut patterned = tag("Order", Some(r"A-\d+"));
+        patterned.extract = true;
+        patterned.ignore_case = true;
+
+        let mut bare = tag("Work", None);
+        bare.extract = true;
+        bare.ignore_case = true;
+
+        let normalized =
+            normalize_managed_tags(vec![ManagedTagConfigInput::Full(patterned), ManagedTagConfigInput::Full(bare)]);
+
+        assert!(normalized[0].extract);
+        assert!(normalized[0].ignore_case);
+        assert!(!normalized[1].extract, "extraction without a pattern has nothing to extract");
+        assert!(!normalized[1].ignore_case);
+    }
+
+    #[test]
+    fn normalize_managed_tags_keeps_the_pattern_and_its_flags() {
+        // Regression guard: the front-end rebuilds every tag on each edit, so a
+        // dropped field here silently wipes a user's rule.
+        let mut with_rule = tag("Order", Some(r"A-\d+"));
+        with_rule.ignore_case = true;
+        with_rule.extract = true;
+
+        let normalized = normalize_managed_tags(vec![ManagedTagConfigInput::Full(with_rule)]);
+
+        assert_eq!(normalized[0].pattern.as_deref(), Some(r"A-\d+"));
+        assert!(normalized[0].ignore_case);
+        assert!(normalized[0].extract);
+    }
+
+    #[test]
+    fn tag_rules_only_come_from_tags_with_a_usable_pattern() {
+        let rules = tag_rules_from_config(&config_with_tags(vec![
+            tag("Work", None),
+            tag("Order", Some(r"A-\d+")),
+            tag("Blank", Some("   ")),
+        ]));
+
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].name, "Order");
+        assert!(rules[0].regex.is_match("ref A-42"));
+        assert!(!rules[0].extract);
+    }
+
+    #[test]
+    fn tag_rules_carry_the_case_and_extract_flags() {
+        let mut patterned = tag("Order", Some("a-\\d+"));
+        patterned.ignore_case = true;
+        patterned.extract = true;
+
+        let rules = tag_rules_from_config(&config_with_tags(vec![patterned]));
+
+        assert!(rules[0].regex.is_match("ref A-42"));
+        assert!(rules[0].extract);
+    }
+
+    #[test]
+    fn an_uncompilable_pattern_is_skipped_instead_of_panicking() {
+        let rules = tag_rules_from_config(&config_with_tags(vec![
+            tag("Bad", Some("(")),
+            tag("Good", Some(r"A-\d+")),
+        ]));
+
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].name, "Good");
+    }
 }

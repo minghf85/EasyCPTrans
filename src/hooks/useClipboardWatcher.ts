@@ -10,6 +10,20 @@ import {
   type ReadClipboard,
 } from "tauri-plugin-clipboard-x-api";
 import { api } from "../lib/api";
+import { classifyClipboard } from "../lib/clipboardPayload";
+import type { SourceAppInfo } from "../types";
+
+/**
+ * Records which application the content came from. The window title drives the
+ * card's label; the executable path is what the source-app icon is looked up by.
+ */
+function attachSourceApp(
+  metadata: Record<string, string[]>,
+  source: SourceAppInfo,
+) {
+  if (source.appName) metadata.appName = [source.appName];
+  if (source.appPath) metadata.appPath = [source.appPath];
+}
 
 export let injectedOverrideSig: string | null = null;
 
@@ -42,6 +56,16 @@ function dataUrlByteLength(dataUrl: string) {
   if (!normalized) return 0;
   const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
+}
+
+/** Pixel size of a data URL, or `null` when it cannot be decoded. */
+async function measureDataUrl(dataUrl: string): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = () => resolve(null);
+    image.src = dataUrl;
+  });
 }
 
 async function imagePathToDataUrl(path: string): Promise<string> {
@@ -146,9 +170,10 @@ export function useClipboardWatcher(
     };
 
     const ingestText = async (text: string) => {
-      const metadata = { length: [text.length.toString()] };
-      const win = await api.getActiveWindow();
-      const result = await api.ingest("text", text, metadata, win);
+      const metadata: Record<string, string[]> = { length: [text.length.toString()] };
+      const source = await api.getActiveWindowInfo();
+      attachSourceApp(metadata, source);
+      const result = await api.ingest("text", text, metadata, source.title);
       if (!result.accepted) {
         console.log("dropped:", result.droppedBy, result.reason);
       }
@@ -182,27 +207,43 @@ export function useClipboardWatcher(
     const ingestFile = async (files: { path: string; size: number }[]) => {
       const fileLines = files.map((f) => f.path).join("\n");
       const totalSize = files.reduce((acc, f) => acc + f.size, 0);
-      const metadata = {
+      const metadata: Record<string, string[]> = {
         count: [files.length.toString()],
         totalSize: [totalSize.toString()],
         sizes: files.map((f) => f.size.toString()),
       };
-      const win = await api.getActiveWindow();
-      const result = await api.ingest("file", fileLines, metadata, win);
+      const source = await api.getActiveWindowInfo();
+      attachSourceApp(metadata, source);
+      const result = await api.ingest("file", fileLines, metadata, source.title);
       if (!result.accepted) {
         console.log("dropped:", result.droppedBy, result.reason);
       }
     };
 
-    const ingestImage = async (clipboard: NonNullable<ReadClipboard["image"]>) => {
-      const dataUrl = await imagePathToDataUrl(clipboard.value);
-      const metadata = {
-        width: [clipboard.width.toString()],
-        height: [clipboard.height.toString()],
+    /**
+     * Reads a staged image file and ingests it as an image item.
+     *
+     * `size` is what the clipboard reported, when it reported anything; a file
+     * that was copied rather than snapshotted has to be measured instead.
+     */
+    const ingestImageFromPath = async (
+      path: string,
+      size?: { width: number; height: number },
+    ) => {
+      const dataUrl = await imagePathToDataUrl(path);
+      const known = size && size.width > 0 && size.height > 0 ? size : await measureDataUrl(dataUrl);
+
+      const metadata: Record<string, string[]> = {
         size: [dataUrlByteLength(dataUrl).toString()],
       };
-      const win = await api.getActiveWindow();
-      const result = await api.ingest("image", dataUrl, metadata, win);
+      if (known) {
+        metadata.width = [known.width.toString()];
+        metadata.height = [known.height.toString()];
+      }
+
+      const source = await api.getActiveWindowInfo();
+      attachSourceApp(metadata, source);
+      const result = await api.ingest("image", dataUrl, metadata, source.title);
       if (!result.accepted) {
         console.log("dropped:", result.droppedBy, result.reason);
       }
@@ -216,40 +257,54 @@ export function useClipboardWatcher(
           injectedOverrideSig = null;
         }
 
-        if (clipboard.files?.value.length) {
-          const files = await api.readFiles().catch(() =>
-            clipboard.files!.value.map((path) => ({ path, size: 0 })),
-          );
-          const paths = files.map((file) => file.path);
-          const sig = `files_${clipboard.files.value.join("|")}`;
-          if (sig !== lastSig) {
-            lastSig = sig;
-            if (Date.now() < clipboardWriteSuppressUntil || Date.now() < translationSuppressUntil) return;
-            if (await stackFiles(paths)) return;
-            await ingestFile(files);
+        const classified = classifyClipboard({
+          image: clipboard.image?.value
+            ? {
+                value: clipboard.image.value,
+                width: clipboard.image.width,
+                height: clipboard.image.height,
+              }
+            : undefined,
+          files: clipboard.files?.value,
+          text: clipboard.text?.value,
+        });
+        if (classified.kind === "none" || classified.sig === lastSig) return;
+        lastSig = classified.sig;
+
+        if (Date.now() < clipboardWriteSuppressUntil || Date.now() < translationSuppressUntil) return;
+
+        if (classified.kind === "image") {
+          const source = classified.image;
+          if (source && "fromClipboard" in source) {
+            await ingestImageFromPath(source.fromClipboard.value, source.fromClipboard);
             return;
           }
-        }
-
-        if (clipboard.image?.value) {
-          const sig = `img_${clipboard.image.width}x${clipboard.image.height}_${clipboard.image.value}`;
-          if (sig !== lastSig) {
-            lastSig = sig;
-            if (Date.now() < clipboardWriteSuppressUntil || Date.now() < translationSuppressUntil) return;
-            await ingestImage(clipboard.image);
+          if (source && "fromPath" in source) {
+            try {
+              await ingestImageFromPath(source.fromPath);
+            } catch (err) {
+              // The pixels could not be read — a format the reader cannot label,
+              // a locked file — but the file itself exists, so keep it rather
+              // than losing the copy.
+              console.warn("[EasyCPTrans] Image read failed, keeping the file:", err);
+              await ingestFile([{ path: source.fromPath, size: 0 }]);
+            }
             return;
           }
+          return;
         }
 
-        if (clipboard.text?.value) {
-          const text = clipboard.text.value;
-          if (text && text !== lastSig) {
-            lastSig = text;
-            if (Date.now() < clipboardWriteSuppressUntil || Date.now() < translationSuppressUntil) return;
-            if (await stackText(text)) return;
-            await ingestText(text);
-          }
+        if (classified.kind === "files") {
+          const files = await api
+            .readFiles()
+            .catch(() => classified.paths.map((path) => ({ path, size: 0 })));
+          if (await stackFiles(files.map((file) => file.path))) return;
+          await ingestFile(files);
+          return;
         }
+
+        if (await stackText(classified.text)) return;
+        await ingestText(classified.text);
       } catch (err) {
         onErrorRef.current("Clipboard error: " + String(err));
       }

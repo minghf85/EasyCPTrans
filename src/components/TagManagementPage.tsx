@@ -1,7 +1,15 @@
 import { useMemo, useState } from "react";
-import { Pencil, Plus, Star, Tag, Trash2 } from "lucide-react";
+import { Pencil, Plus, Regex, Star, Tag, Trash2 } from "lucide-react";
 import { tr, type Locale } from "../lib/i18n";
 import type { ManagedTag } from "../types";
+import { TagRuleDrawer } from "./TagRuleDrawer";
+import {
+  buttonPrimary,
+  buttonSecondary,
+  input,
+  surface,
+  surfaceInteractive,
+} from "./ui";
 
 interface Props {
   tags: ManagedTag[];
@@ -12,6 +20,12 @@ interface Props {
   onDelete: (tag: string) => Promise<void>;
   onToggleCommon: (tag: string) => Promise<void>;
   onSetColor: (tag: string, color: string) => Promise<void>;
+  onSetPattern: (
+    tag: string,
+    pattern: string | null,
+    ignoreCase: boolean,
+    extract: boolean,
+  ) => Promise<void>;
   locale: Locale;
 }
 
@@ -24,14 +38,20 @@ export function TagManagementPage({
   onDelete,
   onToggleCommon,
   onSetColor,
+  onSetPattern,
   locale,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [editingTag, setEditingTag] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
   const [message, setMessage] = useState("");
-  const [createErrorPulse, setCreateErrorPulse] = useState(false);
-  const [renameErrorPulse, setRenameErrorPulse] = useState(false);
+
+  /** The tag whose rule drawer is open, if any. */
+  const [ruleTag, setRuleTag] = useState<string | null>(null);
+  const ruleTagData = useMemo(
+    () => (ruleTag ? tags.find((entry) => entry.name === ruleTag) ?? null : null),
+    [ruleTag, tags],
+  );
 
   const sortedTags = useMemo(
     () =>
@@ -55,8 +75,6 @@ export function TagManagementPage({
       setMessage(tr(locale, "tagCreated"));
     } catch (err) {
       setMessage(String(err));
-      setCreateErrorPulse(false);
-      window.setTimeout(() => setCreateErrorPulse(true), 0);
     }
   };
 
@@ -72,102 +90,128 @@ export function TagManagementPage({
       setMessage(tr(locale, "tagRenamed"));
     } catch (err) {
       setMessage(String(err));
-      setRenameErrorPulse(false);
-      window.setTimeout(() => setRenameErrorPulse(true), 0);
     }
   };
 
   const cancelRename = () => {
     setEditingTag(null);
     setEditingValue("");
-    setRenameErrorPulse(false);
     setMessage("");
   };
 
   const isDeviceTag = (tag: ManagedTag) => tag.id?.startsWith("sys-device-") ?? false;
 
   return (
-    <div className="eacptrans-settings-page eacptrans-page-in">
-      <div className="eacptrans-settings-grid">
-        <section className="eacptrans-settings-card eacptrans-settings-card-wide">
-          <div className="eacptrans-settings-head">
-            <h2>
-              <Tag className="h-4 w-4" />
-              {tr(locale, "tagManagement")}
-            </h2>
-            <p>{tr(locale, "tagIntro")}</p>
-          </div>
+    <div className="eacp-animate-fade space-y-6">
+      <section className={`${surface} p-6`}>
+        <header className="mb-4">
+          <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
+            <Tag className="h-5 w-5 text-blue-600" aria-hidden />
+            {tr(locale, "tagManagement")}
+          </h2>
+          <p className="mt-1 text-sm text-gray-500">{tr(locale, "tagIntro")}</p>
+        </header>
 
-          <div className="eacptrans-field">
-            <span>{tr(locale, "newTag")}</span>
-            <div className="eacptrans-tag-manage-create">
-              <input
-                className={createErrorPulse ? "eacptrans-tag-input-error" : ""}
-                value={draft}
-                onChange={(event) => {
-                  setDraft(event.target.value);
-                  setCreateErrorPulse(false);
-                  setMessage("");
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void handleCreate();
-                }}
-                placeholder={tr(locale, "enterTagName")}
-                disabled={busy}
-                onAnimationEnd={() => setCreateErrorPulse(false)}
-              />
-              <button className="eacptrans-primary-btn" onClick={() => void handleCreate()} disabled={busy || !draft.trim()}>
-                <Plus className="h-4 w-4" />
-                {tr(locale, "addTag")}
-              </button>
-            </div>
-          </div>
+        <label className="block text-sm font-medium text-gray-700" htmlFor="new-tag-input">
+          {tr(locale, "newTag")}
+        </label>
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <input
+            id="new-tag-input"
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setMessage("");
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void handleCreate();
+            }}
+            placeholder={tr(locale, "enterTagName")}
+            disabled={busy}
+            className={`max-w-md flex-1 ${input}`}
+          />
+          <button
+            type="button"
+            className={buttonPrimary}
+            onClick={() => void handleCreate()}
+            disabled={busy || !draft.trim()}
+          >
+            <Plus className="h-4 w-4" aria-hidden />
+            {tr(locale, "addTag")}
+          </button>
+        </div>
 
-          {message && <span className="eacptrans-settings-msg">{message}</span>}
-        </section>
+        {message && (
+          <p role="status" className="mt-3 text-sm text-gray-600">
+            {message}
+          </p>
+        )}
+      </section>
 
-        <section className="eacptrans-settings-card eacptrans-settings-card-wide">
-          <div className="eacptrans-settings-head">
-            <h2>
-              <Tag className="h-4 w-4" />
-              {tr(locale, "existingTags")}
-            </h2>
-            <p>{tr(locale, "existingTagsDesc")}</p>
-          </div>
+      <section className={`${surface} p-6`}>
+        <header className="mb-4">
+          <h2 className="text-lg font-semibold tracking-tight text-gray-900">
+            {tr(locale, "existingTags")}
+          </h2>
+          <p className="mt-1 text-sm text-gray-500">{tr(locale, "existingTagsDesc")}</p>
+        </header>
 
-          <div className="eacptrans-tag-manage-list">
-            {sortedTags.length === 0 ? (
-              <div className="eacptrans-tag-manage-empty">{tr(locale, "noTags")}</div>
-            ) : (
-              sortedTags.map((tag) => {
-                const count = tagCounts.get(tag.name) ?? 0;
-                const editing = editingTag === tag.name;
-                const deviceTag = isDeviceTag(tag);
-                const canRename = deviceTag || !tag.system;
-                return (
-                  <div key={tag.name} className="eacptrans-tag-manage-row">
-                    <div className="eacptrans-tag-manage-meta">
-                      <div className="eacptrans-tag-manage-title">
-                        <span className="eacptrans-tag-manage-pill" style={{ background: `${tag.color}18`, color: tag.color }}>
+        {sortedTags.length === 0 ? (
+          <p className="py-8 text-center text-sm text-gray-500">{tr(locale, "noTags")}</p>
+        ) : (
+          <ul className="space-y-3">
+            {sortedTags.map((tag) => {
+              const count = tagCounts.get(tag.name) ?? 0;
+              const editing = editingTag === tag.name;
+              const deviceTag = isDeviceTag(tag);
+              const canRename = deviceTag || !tag.system;
+              const ruleOpen = ruleTag === tag.name;
+              // System tags are maintained by the app and device tags are derived
+              // from history: a pattern on either would award itself to unrelated
+              // content — an `Image` rule would tag every text item mentioning it.
+              const canHaveRule = !tag.system && !deviceTag;
+
+              return (
+                <li key={tag.name} className={`${surface} ${surfaceInteractive} p-4`}>
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className="inline-flex items-center rounded-lg px-2 py-0.5 text-sm font-medium"
+                          style={{ backgroundColor: `${tag.color}18`, color: tag.color }}
+                        >
                           #{tag.name}
                         </span>
-                        {deviceTag && <span className="eacptrans-tag-kind-badge">{tr(locale, "deviceName")}</span>}
-                        {tag.system && !deviceTag && <span className="eacptrans-tag-kind-badge">{tr(locale, "functional")}</span>}
-                        {!tag.system && <span className="eacptrans-tag-kind-badge">{tr(locale, "custom")}</span>}
+                        <span className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-600">
+                          {deviceTag
+                            ? tr(locale, "deviceName")
+                            : tag.system
+                              ? tr(locale, "functional")
+                              : tr(locale, "custom")}
+                        </span>
+                        {tag.pattern && (
+                          <span
+                            title={tag.pattern}
+                            className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700"
+                          >
+                            <Regex className="h-3 w-3" aria-hidden />
+                            {tr(locale, "tagRule")}
+                            {tag.extract ? ` · ${tr(locale, "tagExtract")}` : ""}
+                          </span>
+                        )}
                       </div>
-                      <small>
-                        {count} {tr(locale, "itemCount")} · {tag.common ? tr(locale, "topBar") : tr(locale, "hidden")}
-                      </small>
+                      <p className="mt-1 text-xs text-gray-500">
+                        {count} {tr(locale, "itemCount")} ·{" "}
+                        {tag.common ? tr(locale, "topBar") : tr(locale, "hidden")}
+                      </p>
                     </div>
 
                     {editing ? (
-                      <div className="eacptrans-tag-manage-actions">
+                      <div className="flex flex-wrap items-center gap-2">
                         <input
-                          className={renameErrorPulse ? "eacptrans-tag-input-error" : ""}
                           value={editingValue}
                           onChange={(event) => {
                             setEditingValue(event.target.value);
-                            setRenameErrorPulse(false);
                             setMessage("");
                           }}
                           onKeyDown={(event) => {
@@ -175,37 +219,64 @@ export function TagManagementPage({
                             if (event.key === "Escape") cancelRename();
                           }}
                           disabled={busy}
-                          onAnimationEnd={() => setRenameErrorPulse(false)}
+                          className={`w-48 ${input}`}
                         />
-                        <button className="eacptrans-primary-btn" onClick={() => void handleRename()} disabled={busy || !editingValue.trim()}>
+                        <button
+                          type="button"
+                          className={buttonPrimary}
+                          onClick={() => void handleRename()}
+                          disabled={busy || !editingValue.trim()}
+                        >
                           {tr(locale, "save")}
                         </button>
-                        <button className="eacptrans-secondary-btn" onClick={cancelRename} disabled={busy}>
+                        <button type="button" className={buttonSecondary} onClick={cancelRename} disabled={busy}>
                           {tr(locale, "cancel")}
                         </button>
                       </div>
                     ) : (
-                      <div className="eacptrans-tag-manage-actions">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {canHaveRule && (
+                          <button
+                            type="button"
+                            className={`${buttonSecondary} ${
+                              ruleOpen ? "border-blue-300 bg-blue-50 text-blue-700" : ""
+                            }`}
+                            onClick={() => setRuleTag(ruleOpen ? null : tag.name)}
+                            disabled={busy}
+                            title={tr(locale, "tagPatternHint")}
+                            aria-expanded={ruleOpen}
+                          >
+                            <Regex className="h-4 w-4" aria-hidden />
+                            {tr(locale, "tagPattern")}
+                          </button>
+                        )}
                         <button
-                          className={`eacptrans-secondary-btn eacptrans-tag-toggle-btn ${tag.common ? "active" : ""}`}
+                          type="button"
+                          className={`${buttonSecondary} ${tag.common ? "border-blue-500 bg-blue-50 text-blue-700" : ""}`}
                           onClick={() => void onToggleCommon(tag.name)}
                           disabled={busy}
+                          aria-pressed={tag.common}
                           title={tag.common ? tr(locale, "hideFromTopBar") : tr(locale, "showInTopBar")}
                         >
-                          <Star className="h-4 w-4" />
+                          <Star className="h-4 w-4" aria-hidden />
                           {tag.common ? tr(locale, "topBar") : tr(locale, "hidden")}
                         </button>
-                        <label className="eacptrans-tag-color-picker" title={tr(locale, "color")}>
+                        <label
+                          className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition duration-200 ease-out hover:bg-gray-50"
+                          title={tr(locale, "color")}
+                        >
                           <input
                             type="color"
                             value={tag.color}
                             onChange={(event) => void onSetColor(tag.name, event.target.value)}
                             disabled={busy}
+                            className="h-5 w-6 cursor-pointer rounded border-0 bg-transparent p-0"
                           />
-                          <span>{tag.color}</span>
+                          <span className="font-mono text-xs">{tag.color}</span>
                         </label>
                         <button
-                          className="eacptrans-secondary-btn"
+                          type="button"
+                          className={buttonSecondary}
                           onClick={() => {
                             if (!canRename) return;
                             setEditingTag(tag.name);
@@ -214,24 +285,40 @@ export function TagManagementPage({
                           }}
                           disabled={busy || !canRename}
                         >
-                          <Pencil className="h-4 w-4" />
+                          <Pencil className="h-4 w-4" aria-hidden />
                           {canRename ? tr(locale, "rename") : tr(locale, "protectedTag")}
                         </button>
                         {!tag.system && (
-                          <button className="eacptrans-secondary-btn" onClick={() => void onDelete(tag.name)} disabled={busy}>
-                            <Trash2 className="h-4 w-4" />
+                          <button
+                            type="button"
+                            className={buttonSecondary}
+                            onClick={() => void onDelete(tag.name)}
+                            disabled={busy}
+                          >
+                            <Trash2 className="h-4 w-4" aria-hidden />
                             {tr(locale, "delete")}
                           </button>
                         )}
                       </div>
                     )}
                   </div>
-                );
-              })
-            )}
-          </div>
-        </section>
-      </div>
+
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+      {ruleTag && ruleTagData && (
+        <TagRuleDrawer
+          key={ruleTag}
+          tag={ruleTagData}
+          locale={locale}
+          busy={busy}
+          onSave={onSetPattern}
+          onClose={() => setRuleTag(null)}
+        />
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // @ts-expect-error process is a nodejs global
@@ -31,5 +31,13 @@ export default defineConfig(async () => ({
   },
   optimizeDeps: {
     entries: ['index.html'],
+  },
+
+  // Unit tests cover the pure logic in `src/lib` and the Tauri bridge, so they
+  // run in a plain node environment — no jsdom, no rendered components. Keeping
+  // the runner fast is what makes it realistic to run on every change.
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
   },
 }));
