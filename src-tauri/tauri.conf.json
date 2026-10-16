@@ -38,10 +38,8 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "perUser",
-        "installerIcon": "icons/icon.ico",
-        "installerArgs": ["/S"],
-        "deleteAppDataOnUninstall": false
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico"
       }
     }
   }
