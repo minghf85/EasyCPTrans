@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyCPTrans - 智能剪贴板管理工具</title>
+  <meta name="description" content="EasyCPTrans 是一款强大的剪贴板管理工具，支持文本、图片、文件管理，OCR 文字识别，LLM 翻译等功能。">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <div class="nav-brand">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="32" height="32" rx="8" fill="#2563eb"/>
+          <path d="M8 12h16M8 16h12M8 20h14" stroke="white" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>EasyCPTrans</span>
+      </div>
+      <div class="nav-links">
+        <button class="lang-switch" onclick="toggleLanguage()">
+          <span id="langLabel">EN</span>
+        </button>
+        <a href="#features" data-i18n="nav.features">功能</a>
+        <a href="https://github.com/minghf85/EasyCPTrans/releases" target="_blank" class="btn-primary" data-i18n="nav.download">下载</a>
+      </div>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <div class="container">
+      <h1 data-i18n="hero.title">智能剪贴板，触手可及</h1>
+      <p class="hero-subtitle" data-i18n="hero.subtitle">
+        自动捕获、智能管理、快速取用。让剪贴板工作流更高效。
+      </p>
+      <div class="hero-actions">
+        <a href="https://github.com/minghf85/EasyCPTrans/releases" target="_blank" class="btn-primary btn-large" data-i18n="hero.download">
+          免费下载
+        </a>
+        <a href="#features" class="btn-secondary btn-large" data-i18n="hero.learnMore">
+          了解更多
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section id="features" class="features">
+    <div class="container">
+      <h2 class="section-title" data-i18n="features.title">强大功能，简约设计</h2>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+              <rect width="40" height="40" rx="10" fill="#dbeafe"/>
+              <path d="M12 16h16M12 20h12M12 24h14" stroke="#2563eb" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3 data-i18n="features.clipboard.title">智能剪贴板管理</h3>
+          <p data-i18n="features.clipboard.desc">自动捕获复制的文本、图片和文件，按时间顺序整理，随时取用。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+              <rect width="40" height="40" rx="10" fill="#fef3c7"/>
+              <circle cx="20" cy="20" r="8" stroke="#f59e0b" stroke-width="2"/>
+              <path d="M20 16v4l3 3" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3 data-i18n="features.preview.title">可视化内容预览</h3>
+          <p data-i18n="features.preview.desc">文本、图片、文件一目了然，支持快速搜索和标签筛选。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+              <rect width="40" height="40" rx="10" fill="#dcfce7"/>
+              <path d="M14 18l4 4 8-8" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h3 data-i18n="features.ocr.title">OCR 文字识别</h3>
+          <p data-i18n="features.ocr.desc">图片中的文字也能提取，支持多语言识别，识别结果可编辑和翻译。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+              <rect width="40" height="40" rx="10" fill="#fce7f3"/>
+              <path d="M12 20h16M20 12v16" stroke="#db2777" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3 data-i18n="features.translate.title">智能翻译</h3>
+          <p data-i18n="features.translate.desc">集成 LLM 翻译，支持 8 种常用语言，也可自定义目标语言。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+              <rect width="40" height="40" rx="10" fill="#e0e7ff"/>
+              <rect x="12" y="14" width="16" height="12" rx="2" stroke="#4f46e5" stroke-width="2"/>
+              <path d="M16 18h8M16 22h6" stroke="#4f46e5" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3 data-i18n="features.tags.title">标签系统</h3>
+          <p data-i18n="features.tags.desc">自定义标签分类管理，快速规则自动识别，内容组织更有序。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+              <rect width="40" height="40" rx="10" fill="#fef3c7"/>
+              <path d="M14 20l4 4 8-8" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h3 data-i18n="features.quick.title">快速粘贴</h3>
+          <p data-i18n="features.quick.desc">点击卡片或按 Enter 键即可粘贴，支持快捷键快速操作。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="container">
+      <h2 data-i18n="cta.title">开始使用 EasyCPTrans</h2>
+      <p data-i18n="cta.desc">免费下载，立即提升你的剪贴板工作效率。</p>
+      <a href="https://github.com/minghf85/EasyCPTrans/releases" target="_blank" class="btn-primary btn-large" data-i18n="cta.download">
+        下载 Windows 版本
+      </a>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="container">
+      <p>&copy; 2024 EasyCPTrans. <span data-i18n="footer.rights">保留所有权利。</span></p>
+      <p class="footer-links">
+        <a href="https://github.com/minghf85/EasyCPTrans" target="_blank" data-i18n="footer.github">GitHub</a>
+        <span>·</span>
+        <a href="https://github.com/minghf85/EasyCPTrans/releases" target="_blank" data-i18n="footer.releases">发布版本</a>
+      </p>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

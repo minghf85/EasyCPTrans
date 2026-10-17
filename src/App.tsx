@@ -37,6 +37,7 @@ import { QuickTextEditorPage } from "./components/QuickTextEditorPage";
 import { SettingsModal } from "./components/SettingsModal";
 import type { SettingsModalHandle } from "./components/SettingsModal";
 import { TagManagementPage } from "./components/TagManagementPage";
+import { WelcomeGuide } from "./components/WelcomeGuide";
 import {
   focusRing,
   iconButton,
@@ -266,6 +267,9 @@ function MainApp() {
   const [sessionPrivacyPassword, setSessionPrivacyPassword] = useState<string | null>(null);
   const settingsModalRef = useRef<SettingsModalHandle | null>(null);
   const [settingsSaveState, setSettingsSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [showWelcome, setShowWelcome] = useState(() => {
+    return !localStorage.getItem("eacp-welcome-seen");
+  });
 
   useEffect(() => {
     api
@@ -2266,6 +2270,16 @@ function MainApp() {
           onMatchDragStart={handleMatchDragStart}
           onMatchDragEnd={handleMatchDragEnd}
           onCreateCard={handleCreateCardFromText}
+        />
+      )}
+
+      {showWelcome && (
+        <WelcomeGuide
+          locale={locale}
+          onClose={() => {
+            localStorage.setItem("eacp-welcome-seen", "1");
+            setShowWelcome(false);
+          }}
         />
       )}
     </div>
