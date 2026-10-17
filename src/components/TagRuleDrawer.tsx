@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, Regex, RotateCw } from "lucide-react";
 import { api } from "../lib/api";
 import { tr, type I18nKey, type Locale } from "../lib/i18n";
+import { getTagDisplayName } from "../lib/tagDisplay";
 import type { ManagedTag } from "../types";
-import { buttonPrimary, buttonSecondary, focusRing, inputMono, transition } from "./ui";
+import { buttonPrimary, buttonSecondary, focusRing, inputMono, overlay, transition } from "./ui";
 
 /**
  * The editor for one tag's regex rule.
@@ -20,6 +22,7 @@ import { buttonPrimary, buttonSecondary, focusRing, inputMono, transition } from
 const PATTERN_PRESETS: Array<{ labelKey: I18nKey; pattern: string }> = [
   { labelKey: "tagPresetLink", pattern: "https?://[^\\s<>\"')]+" },
   { labelKey: "tagPresetEmail", pattern: "[\\w.+-]+@[\\w-]+\\.[\\w.-]+" },
+  { labelKey: "tagPresetPhone", pattern: "\\b(?:\\+?\\d{1,3}[-.\\s]?)?\\(?\\d{2,4}\\)?[-.\\s]?\\d{3,4}[-.\\s]?\\d{3,4}\\b" },
   { labelKey: "tagPresetPath", pattern: "[A-Za-z]:\\\\[^\\s\"<>|?*]+" },
   { labelKey: "tagPresetIp", pattern: "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b" },
   { labelKey: "tagPresetColor", pattern: "#[0-9a-fA-F]{6}\\b" },
@@ -142,9 +145,9 @@ export function TagRuleDrawer({ tag, locale, busy, onSave, onClose }: Props) {
     { key: "tagRuleScopeNever", ok: false },
   ];
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-[70] flex justify-end bg-gray-900/40"
+      className={`${overlay} z-[70]`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !saving) onClose();
       }}
@@ -152,8 +155,8 @@ export function TagRuleDrawer({ tag, locale, busy, onSave, onClose }: Props) {
       <aside
         role="dialog"
         aria-modal="true"
-        aria-label={`${tr(locale, "tagPattern")} · #${tag.name}`}
-        className="eacp-scroll flex h-full w-full max-w-3xl flex-col overflow-y-auto border-l border-gray-200 bg-white shadow-md"
+        aria-label={`${tr(locale, "tagPattern")} · #${getTagDisplayName(tag.name, locale)}`}
+        className="eacp-scroll flex max-h-[min(640px,calc(100vh-48px))] w-full max-w-3xl flex-col overflow-y-auto rounded-2xl border border-gray-200 bg-white shadow-xl"
       >
         <header className="flex items-center gap-3 border-b border-gray-200 px-5 py-3">
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
@@ -161,7 +164,7 @@ export function TagRuleDrawer({ tag, locale, busy, onSave, onClose }: Props) {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold tracking-tight text-gray-900">
-              #{tag.name}
+              #{getTagDisplayName(tag.name, locale)}
             </span>
             <span className="block truncate text-xs text-gray-500">
               {tr(locale, "tagPattern")}
@@ -353,6 +356,7 @@ export function TagRuleDrawer({ tag, locale, busy, onSave, onClose }: Props) {
           </section>
         </div>
       </aside>
-    </div>
+    </div>,
+    document.body,
   );
 }

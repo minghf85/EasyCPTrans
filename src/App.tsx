@@ -58,6 +58,7 @@ import { shouldHideOnBlur } from "./lib/windowFocus";
 import { escapeTarget, isEditingField, shouldHandleCardShortcut } from "./lib/interactionRules";
 import type { DragChipBitmap } from "./lib/dragChip";
 import type { TagMatchGroup } from "./lib/tagMatches";
+import { getLocalizedReservedNames, getTagDisplayName } from "./lib/tagDisplay";
 import {
   aggregateTags,
   applyFilters,
@@ -101,7 +102,7 @@ function deviceTagId(name: string) {
 }
 
 function isReservedFunctionalTagName(name: string) {
-  return ["text", "image", "file", "word", "private", "privacy", "pinned"].includes(
+  return ["text", "image", "file", "word", "private", "privacy", "pinned", "ocr", "link", "email", "phone", "path", "ip", "color"].includes(
     name.trim().toLowerCase(),
   );
 }
@@ -514,7 +515,7 @@ function MainApp() {
       .filter((tag) => tag.common)
       .map((tag) => ({
         key: `tag:${tag.name}` as const,
-        label: `#${tag.name}`,
+        label: `#${getTagDisplayName(tag.name, locale)}`,
         dotClass: "dot-tag",
         icon: Tags,
       }));
@@ -522,7 +523,7 @@ function MainApp() {
       .filter((tag) => tag.common && !tag.system)
       .map((tag) => ({
         key: `tag:${tag.name}` as const,
-        label: `#${tag.name}`,
+        label: `#${getTagDisplayName(tag.name, locale)}`,
         dotClass: "dot-tag",
         icon: Tags,
       }));
@@ -1293,6 +1294,11 @@ function MainApp() {
     if (isReservedFunctionalTagName(cleaned)) {
       throw new Error("This tag is managed automatically.");
     }
+    // Also block localized display names of reserved tags (e.g., "链接" in Chinese)
+    const localizedReserved = getLocalizedReservedNames(locale).map((n) => n.toLowerCase());
+    if (localizedReserved.includes(cleaned.toLowerCase())) {
+      throw new Error("This name is reserved for a system tag.");
+    }
     if (sourceHistory.some((item) => item.metadata?.deviceName?.some((name) => name === cleaned))) {
       throw new Error("Device tags are managed automatically.");
     }
@@ -1310,6 +1316,11 @@ function MainApp() {
     }
     if (isReservedFunctionalTagName(cleaned)) {
       throw new Error("This tag is managed automatically.");
+    }
+    // Also block localized display names of reserved tags
+    const localizedReserved = getLocalizedReservedNames(locale).map((n) => n.toLowerCase());
+    if (localizedReserved.includes(cleaned.toLowerCase())) {
+      throw new Error("This name is reserved for a system tag.");
     }
 
     setTagManageBusy(true);
@@ -1422,6 +1433,39 @@ function MainApp() {
             : item,
         ),
       );
+    } finally {
+      setTagManageBusy(false);
+    }
+  };
+
+  /**
+   * Quick rule toggle: creates the tag with the pattern already set, or updates
+   * an existing tag. This avoids the race condition of calling onCreate then
+   * onSetPattern separately.
+   */
+  const handleEnableQuickRule = async (
+    tagName: string,
+    color: string,
+    pattern: string,
+    ignoreCase: boolean,
+  ) => {
+    setTagManageBusy(true);
+    try {
+      const existing = allKnownTags.find((t) => t.name.toLowerCase() === tagName.toLowerCase());
+      if (existing) {
+        await saveManagedTags(
+          allKnownTags.map((item) =>
+            item.name === existing.name
+              ? { ...item, pattern, ignoreCase, extract: true }
+              : item,
+          ),
+        );
+      } else {
+        await saveManagedTags([
+          ...allKnownTags,
+          { name: tagName, common: false, color, pattern, ignoreCase, extract: true },
+        ]);
+      }
     } finally {
       setTagManageBusy(false);
     }
@@ -1942,7 +1986,7 @@ function MainApp() {
               ? systemConfig?.color ??
                 allKnownTags.find((tag) => `tag:${tag.name}` === key)?.color ??
                 DEFAULT_TAG_COLOR
-              : null;
+              : systemConfig?.color ?? null;
 
             return (
               <Fragment key={key}>
@@ -2012,7 +2056,7 @@ function MainApp() {
                             ) : (
                               <Square className="h-3.5 w-3.5" aria-hidden />
                             )}
-                            <span>#{tag.name}</span>
+                            <span>#{getTagDisplayName(tag.name, locale)}</span>
                           </button>
                         );
                       })
@@ -2067,6 +2111,7 @@ function MainApp() {
             onToggleCommon={handleToggleManagedTagCommon}
             onSetColor={handleSetManagedTagColor}
             onSetPattern={handleSetManagedTagPattern}
+            onEnableQuickRule={handleEnableQuickRule}
             locale={locale}
           />
         </div>

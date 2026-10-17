@@ -1,6 +1,7 @@
 import { useState, type DragEvent as ReactDragEvent } from "react";
 import { ChevronDown, GripVertical, Layers2, Plus, X } from "lucide-react";
 import { tr, type Locale } from "../lib/i18n";
+import { getTagDisplayName } from "../lib/tagDisplay";
 import type { TagMatchGroup } from "../lib/tagMatches";
 import type { HistoryItem } from "../types";
 import { focusRing, iconButton, inset, modalPanel, overlay, surface, surfaceInteractive } from "./ui";
@@ -79,7 +80,7 @@ export function MatchStack({
                   className="block truncate text-sm font-semibold tracking-tight"
                   style={color ? { color } : undefined}
                 >
-                  #{group.tag}
+                  #{getTagDisplayName(group.tag, locale)}
                 </span>
                 <span className="block truncate text-xs text-gray-500">
                   {group.total} {tr(locale, "matchCount")}
@@ -174,7 +175,7 @@ export function MatchPanel({
               className="truncate text-sm font-semibold tracking-tight text-gray-900"
               style={color ? { color } : undefined}
             >
-              #{group.tag}
+              #{getTagDisplayName(group.tag, locale)}
             </h2>
             <p className="truncate text-xs text-gray-500">
               {group.total} {tr(locale, "matchCount")} ·{" "}

@@ -39,6 +39,7 @@ import {
 import { fileBasename, fileKindFor, fileParentDir } from "../lib/fileIcons";
 import { collectTagMatches, type TagMatchGroup } from "../lib/tagMatches";
 import { tr, normalizeLocale, type Locale } from "../lib/i18n";
+import { getTagDisplayName } from "../lib/tagDisplay";
 import { useCardGesture, type CardGesturePhase } from "../hooks/useCardGesture";
 import { useCardTilt } from "../hooks/useCardTilt";
 import { prewarmImageDrop } from "../lib/dropStage";
@@ -776,7 +777,7 @@ export const ClipboardCard = memo(function ClipboardCard({
                 }`}
               >
                 <Tag className="h-3 w-3" aria-hidden />
-                #{tag}
+                #{getTagDisplayName(tag, locale ?? "zh-CN")}
               </span>
             );
           })}

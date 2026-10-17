@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { Pencil, Plus, Regex, Star, Tag, Trash2 } from "lucide-react";
-import { tr, type Locale } from "../lib/i18n";
+import { Link2, Mail, MapPin, Palette, Pencil, Phone, Plus, Regex, Star, Tag, Trash2 } from "lucide-react";
+import { tr, type I18nKey, type Locale } from "../lib/i18n";
+import { getTagDisplayName } from "../lib/tagDisplay";
 import type { ManagedTag } from "../types";
 import { TagRuleDrawer } from "./TagRuleDrawer";
 import {
@@ -9,7 +10,84 @@ import {
   input,
   surface,
   surfaceInteractive,
+  transition,
 } from "./ui";
+
+/**
+ * Ready-to-use regex rules for common content types.
+ *
+ * Each preset defines a tag name (stored in English), a display name key (localized),
+ * color, and pattern. When enabled, the tag is created (if needed) with the English
+ * name but displayed using the localized string.
+ */
+interface QuickRulePreset {
+  /** Display name key for localization */
+  nameKey: I18nKey;
+  descKey: I18nKey;
+  /** English tag name for backend storage */
+  tagName: string;
+  color: string;
+  pattern: string;
+  ignoreCase: boolean;
+  icon: typeof Link2;
+}
+
+const QUICK_RULE_PRESETS: QuickRulePreset[] = [
+  {
+    nameKey: "tagPresetLink",
+    descKey: "tagPresetLink",
+    tagName: "Link",
+    color: "#2563eb",
+    pattern: "https?://[^\\s<>\"')]+",
+    ignoreCase: false,
+    icon: Link2,
+  },
+  {
+    nameKey: "tagPresetEmail",
+    descKey: "tagPresetEmail",
+    tagName: "Email",
+    color: "#16a34a",
+    pattern: "[\\w.+-]+@[\\w-]+\\.[\\w.-]+",
+    ignoreCase: true,
+    icon: Mail,
+  },
+  {
+    nameKey: "tagPresetPhone",
+    descKey: "tagPresetPhone",
+    tagName: "Phone",
+    color: "#ea580c",
+    pattern: "\\b(?:\\+?\\d{1,3}[-.\\s]?)?\\(?\\d{2,4}\\)?[-.\\s]?\\d{3,4}[-.\\s]?\\d{3,4}\\b",
+    ignoreCase: false,
+    icon: Phone,
+  },
+  {
+    nameKey: "tagPresetPath",
+    descKey: "tagPresetPath",
+    tagName: "Path",
+    color: "#64748b",
+    pattern: "[A-Za-z]:\\\\[^\\s\"<>|?*]+",
+    ignoreCase: false,
+    icon: MapPin,
+  },
+  {
+    nameKey: "tagPresetIp",
+    descKey: "tagPresetIp",
+    tagName: "IP",
+    color: "#7c3aed",
+    pattern: "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b",
+    ignoreCase: false,
+    icon: MapPin,
+  },
+  {
+    nameKey: "tagPresetColor",
+    descKey: "tagPresetColor",
+    tagName: "Color",
+    color: "#db2777",
+    pattern: "#[0-9a-fA-F]{6}\\b",
+    ignoreCase: false,
+    icon: Palette,
+  },
+];
 
 interface Props {
   tags: ManagedTag[];
@@ -26,6 +104,13 @@ interface Props {
     ignoreCase: boolean,
     extract: boolean,
   ) => Promise<void>;
+  /** Atomic create-or-update for quick rules: avoids race between onCreate and onSetPattern. */
+  onEnableQuickRule: (
+    tagName: string,
+    color: string,
+    pattern: string,
+    ignoreCase: boolean,
+  ) => Promise<void>;
   locale: Locale;
 }
 
@@ -39,6 +124,7 @@ export function TagManagementPage({
   onToggleCommon,
   onSetColor,
   onSetPattern,
+  onEnableQuickRule,
   locale,
 }: Props) {
   const [draft, setDraft] = useState("");
@@ -52,6 +138,19 @@ export function TagManagementPage({
     () => (ruleTag ? tags.find((entry) => entry.name === ruleTag) ?? null : null),
     [ruleTag, tags],
   );
+
+  /** Find which preset tags already exist and have a pattern set. */
+  const presetStatus = useMemo(() => {
+    const map = new Map<string, { enabled: boolean; tag: ManagedTag | null }>();
+    for (const preset of QUICK_RULE_PRESETS) {
+      const existing = tags.find((t) => t.name.toLowerCase() === preset.tagName.toLowerCase());
+      map.set(preset.tagName, {
+        enabled: Boolean(existing?.pattern),
+        tag: existing ?? null,
+      });
+    }
+    return map;
+  }, [tags]);
 
   const sortedTags = useMemo(
     () =>
@@ -148,6 +247,88 @@ export function TagManagementPage({
         )}
       </section>
 
+      {/* ── Quick Rules ── */}
+      <section className={`${surface} p-6`}>
+        <header className="mb-4">
+          <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
+            <Regex className="h-5 w-5 text-blue-600" aria-hidden />
+            {tr(locale, "quickRules")}
+          </h2>
+          <p className="mt-1 text-sm text-gray-500">{tr(locale, "quickRulesDesc")}</p>
+        </header>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {QUICK_RULE_PRESETS.map((preset) => {
+            const status = presetStatus.get(preset.tagName);
+            const enabled = status?.enabled ?? false;
+            const displayName = getTagDisplayName(preset.tagName, locale);
+            const Icon = preset.icon;
+
+            return (
+              <div
+                key={preset.tagName}
+                className={`flex items-start gap-3 rounded-xl border p-4 ${transition} ${
+                  enabled
+                    ? "border-blue-300 bg-blue-50/50"
+                    : "border-gray-200 bg-white hover:border-gray-300"
+                }`}
+              >
+                <span
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                  style={{ backgroundColor: `${preset.color}18`, color: preset.color }}
+                  aria-hidden
+                >
+                  <Icon className="h-5 w-5" />
+                </span>
+
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    {displayName}
+                  </h3>
+                  <p className="mt-0.5 truncate font-mono text-xs text-gray-500" title={preset.pattern}>
+                    {preset.pattern}
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (enabled) {
+                        // Disable: remove the pattern but keep the tag
+                        void onSetPattern(preset.tagName, null, false, false);
+                      } else {
+                        // Enable: create tag with pattern in one atomic operation
+                        void onEnableQuickRule(preset.tagName, preset.color, preset.pattern, preset.ignoreCase);
+                      }
+                    }}
+                    disabled={busy}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium ${transition} ${
+                      enabled
+                        ? "bg-blue-600 text-white hover:bg-blue-700"
+                        : "border border-gray-300 bg-white text-gray-700 hover:border-blue-500 hover:text-blue-700"
+                    }`}
+                  >
+                    {enabled ? tr(locale, "quickRuleEnabled") : tr(locale, "quickRuleEnable")}
+                  </button>
+                  {enabled && (
+                    <button
+                      type="button"
+                      onClick={() => setRuleTag(preset.tagName)}
+                      disabled={busy}
+                      title={tr(locale, "quickRuleCustomize")}
+                      className={`rounded-lg p-1.5 text-gray-500 ${transition} hover:bg-gray-100 hover:text-gray-700`}
+                    >
+                      <Pencil className="h-3.5 w-3.5" aria-hidden />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
       <section className={`${surface} p-6`}>
         <header className="mb-4">
           <h2 className="text-lg font-semibold tracking-tight text-gray-900">
@@ -180,7 +361,7 @@ export function TagManagementPage({
                           className="inline-flex items-center rounded-lg px-2 py-0.5 text-sm font-medium"
                           style={{ backgroundColor: `${tag.color}18`, color: tag.color }}
                         >
-                          #{tag.name}
+                          #{getTagDisplayName(tag.name, locale)}
                         </span>
                         <span className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-600">
                           {deviceTag

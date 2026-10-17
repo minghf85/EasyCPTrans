@@ -234,6 +234,11 @@ fn normalize_managed_tags(items: Vec<ManagedTagConfigInput>) -> Vec<ManagedTagCo
         if cleaned.is_empty() {
             continue;
         }
+        // Block user tags from using system/functional tag names (case-insensitive).
+        // These are reserved for the pipeline and must not be user-managed.
+        if is_system_tag_name(cleaned) && !tag.system {
+            continue;
+        }
         let key = tag.id.clone().unwrap_or_else(|| cleaned.to_lowercase());
         if seen.insert(key) {
             let pattern = normalize_tag_pattern(tag.pattern);
@@ -251,6 +256,15 @@ fn normalize_managed_tags(items: Vec<ManagedTagConfigInput>) -> Vec<ManagedTagCo
         }
     }
     normalized
+}
+
+/// Check if a tag name is a system/functional tag (case-insensitive).
+/// These names are reserved for the pipeline and cannot be used by user tags.
+fn is_system_tag_name(name: &str) -> bool {
+    matches!(
+        name.to_lowercase().as_str(),
+        "text" | "image" | "file" | "word" | "private" | "privacy" | "pinned" | "ocr"
+    )
 }
 
 fn normalize_tag_pattern(value: Option<String>) -> Option<String> {
@@ -3391,6 +3405,37 @@ mod tests {
         assert_eq!(normalized[0].pattern.as_deref(), Some(r"A-\d+"));
         assert!(normalized[0].ignore_case);
         assert!(normalized[0].extract);
+    }
+
+    #[test]
+    fn normalize_managed_tags_filters_out_system_tag_names() {
+        // User tags must not use system/functional names, even if the front-end
+        // already validates — the backend is the last line of defence.
+        let normalized = normalize_managed_tags(vec![
+            ManagedTagConfigInput::Name("Text".into()),
+            ManagedTagConfigInput::Name("image".into()),
+            ManagedTagConfigInput::Name("FILE".into()),
+            ManagedTagConfigInput::Name("private".into()),
+            ManagedTagConfigInput::Name("pinned".into()),
+            ManagedTagConfigInput::Name("word".into()),
+            ManagedTagConfigInput::Name("ocr".into()),
+            ManagedTagConfigInput::Name("Work".into()),
+        ]);
+
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].name, "Work");
+    }
+
+    #[test]
+    fn normalize_managed_tags_allows_quick_rule_preset_names() {
+        // Quick-rule preset names (Link, Email, etc.) are user tags, not system tags.
+        let normalized = normalize_managed_tags(vec![
+            ManagedTagConfigInput::Name("Link".into()),
+            ManagedTagConfigInput::Name("Email".into()),
+            ManagedTagConfigInput::Name("Phone".into()),
+        ]);
+
+        assert_eq!(normalized.len(), 3);
     }
 
     #[test]

@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { api } from "../lib/api";
 import { tr, type Locale } from "../lib/i18n";
+import { getTagDisplayName } from "../lib/tagDisplay";
 import { placeMenu, type MenuPlacement } from "../lib/menuPlacement";
 import type { HistoryItem } from "../types";
 import {
@@ -98,20 +99,28 @@ export interface CardContextMenuProps {
 export function CardContextMenu(props: CardContextMenuProps) {
   const { item, anchor, availableTags, locale, onClose } = props;
 
-  const [view, setView] = useState<"root" | "tags">("root");
+  const [view, setView] = useState<"root" | "tags" | "translate">("root");
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   const [creatingTag, setCreatingTag] = useState(false);
   const [newTagValue, setNewTagValue] = useState("");
   const [newTagError, setNewTagError] = useState("");
   const [newTagBusy, setNewTagBusy] = useState(false);
+  const [customLang, setCustomLang] = useState("");
 
   const popupRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const tagItemRef = useRef<HTMLDivElement | null>(null);
+  const translateItemRef = useRef<HTMLDivElement | null>(null);
   const newTagInputRef = useRef<HTMLInputElement | null>(null);
 
   const ocrText = item.metadata?.ocrText?.[0] ?? "";
   const hasPrivacy = item.isPrivate;
+  const canTranslate =
+    !hasPrivacy &&
+    props.apiTranslateEnabled &&
+    (item.contentType === "text" || (item.contentType === "image" && ocrText.length > 0));
+  // For images, translate the OCR text rather than the (binary) content field.
+  const translatableText = item.contentType === "image" ? ocrText : item.content;
 
   const activate = (action: Action) => {
     if (action.disabled) return;
@@ -176,17 +185,15 @@ export function CardContextMenu(props: CardContextMenuProps) {
             },
           ]
         : []),
-      ...(item.contentType === "text" && !hasPrivacy && props.apiTranslateEnabled
+      ...(canTranslate
         ? [
             {
               key: "translate",
               icon: <Languages className="h-3.5 w-3.5 shrink-0" aria-hidden />,
-              label: tr(locale, "translateWithApi"),
-              run: () => {
-                void api
-                  .translateTextApi(item.content)
-                  .catch((err) => props.onNotify(String(err)));
-              },
+              label: tr(locale, "ocrTranslate"),
+              shortcut: "▸",
+              keepOpen: true,
+              run: () => setView((current) => (current === "translate" ? "root" : "translate")),
             },
           ]
         : []),
@@ -369,6 +376,9 @@ export function CardContextMenu(props: CardContextMenuProps) {
         if (document.activeElement === tagItemRef.current && view === "root") {
           handled();
           setView("tags");
+        } else if (document.activeElement === translateItemRef.current && view === "root") {
+          handled();
+          setView("translate");
         }
         return;
       case "ArrowLeft":
@@ -376,6 +386,10 @@ export function CardContextMenu(props: CardContextMenuProps) {
           handled();
           setView("root");
           tagItemRef.current?.focus({ preventScroll: true });
+        } else if (view === "translate") {
+          handled();
+          setView("root");
+          translateItemRef.current?.focus({ preventScroll: true });
         }
         return;
       case "Tab":
@@ -413,19 +427,20 @@ export function CardContextMenu(props: CardContextMenuProps) {
 
   const renderItem = (action: Action) => {
     const isTagAction = action.key === "tag";
+    const isTranslateAction = action.key === "translate";
     return (
       <div
         key={action.key}
-        ref={isTagAction ? tagItemRef : undefined}
+        ref={isTagAction ? tagItemRef : isTranslateAction ? translateItemRef : undefined}
         role="menuitem"
         tabIndex={-1}
-        aria-haspopup={isTagAction ? "menu" : undefined}
-        aria-expanded={isTagAction ? view === "tags" : undefined}
+        aria-haspopup={isTagAction || isTranslateAction ? "menu" : undefined}
+        aria-expanded={isTagAction ? view === "tags" : isTranslateAction ? view === "translate" : undefined}
         aria-disabled={action.disabled || undefined}
         onClick={() => activate(action)}
         className={`${action.danger ? menuItemDanger : menuItem} ${
           action.disabled ? "pointer-events-none opacity-50" : ""
-        } ${isTagAction && view === "tags" ? "bg-gray-100" : ""}`}
+        } ${isTagAction && view === "tags" ? "bg-gray-100" : ""} ${isTranslateAction && view === "translate" ? "bg-gray-100" : ""}`}
       >
         {action.icon}
         <span className="min-w-0 flex-1 truncate">{action.label}</span>
@@ -488,7 +503,7 @@ export function CardContextMenu(props: CardContextMenuProps) {
                   ) : (
                     <Square className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
                   )}
-                  <span className="min-w-0 flex-1 truncate">#{tag}</span>
+                  <span className="min-w-0 flex-1 truncate">#{getTagDisplayName(tag, locale)}</span>
                 </div>
               );
             })
@@ -554,6 +569,76 @@ export function CardContextMenu(props: CardContextMenuProps) {
               {tr(locale, "newTag")}
             </div>
           )}
+        </div>
+      )}
+
+      {view === "translate" && (
+        <div
+          role="menu"
+          aria-label={tr(locale, "translateTo")}
+          className={`${columns} border-l border-gray-200 pl-2`}
+        >
+          <p className="px-2 py-1.5 text-xs font-medium text-gray-500">{tr(locale, "translateTo")}</p>
+          {[
+            { key: "langChinese" as const, value: "中文" },
+            { key: "langEnglish" as const, value: "English" },
+            { key: "langJapanese" as const, value: "日本語" },
+            { key: "langKorean" as const, value: "한국어" },
+            { key: "langFrench" as const, value: "Français" },
+            { key: "langGerman" as const, value: "Deutsch" },
+            { key: "langSpanish" as const, value: "Español" },
+            { key: "langRussian" as const, value: "Русский" },
+          ].map((lang) => (
+            <div
+              key={lang.key}
+              role="menuitem"
+              tabIndex={-1}
+              onClick={() => {
+                void api
+                  .translateTextApi(translatableText, lang.value)
+                  .catch((err) => props.onNotify(String(err)));
+                props.onClose();
+              }}
+              className={menuItem}
+            >
+              <Languages className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
+              <span className="min-w-0 flex-1 truncate">{tr(locale, lang.key)}</span>
+            </div>
+          ))}
+
+          <div className="space-y-1.5 border-t border-gray-200 pt-2">
+            <p className="px-2 text-xs font-medium text-gray-500">{tr(locale, "translateCustomLang")}</p>
+            <div className="flex items-center gap-1.5 px-1">
+              <input
+                value={customLang}
+                onChange={(event) => setCustomLang(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && customLang.trim()) {
+                    void api
+                      .translateTextApi(translatableText, customLang.trim())
+                      .catch((err) => props.onNotify(String(err)));
+                    props.onClose();
+                  }
+                }}
+                placeholder={tr(locale, "translateCustomLangPlaceholder")}
+                className={`${input} flex-1 px-2 py-1.5 text-xs`}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (!customLang.trim()) return;
+                  void api
+                    .translateTextApi(translatableText, customLang.trim())
+                    .catch((err) => props.onNotify(String(err)));
+                  props.onClose();
+                }}
+                disabled={!customLang.trim()}
+                className={`${buttonPrimary} shrink-0 px-2.5 py-1 text-xs`}
+              >
+                {tr(locale, "ocrTranslate")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>,
