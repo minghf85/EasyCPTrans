@@ -21,6 +21,7 @@
         <button class="lang-switch" onclick="toggleLanguage()">
           <span id="langLabel">EN</span>
         </button>
+        <a href="#demo" data-i18n="nav.demo">演示</a>
         <a href="#features" data-i18n="nav.features">功能</a>
         <a href="https://github.com/minghf85/EasyCPTrans/releases" target="_blank" class="btn-primary" data-i18n="nav.download">下载</a>
       </div>
@@ -34,12 +35,62 @@
         自动捕获、智能管理、快速取用。让剪贴板工作流更高效。
       </p>
       <div class="hero-actions">
-        <a href="https://github.com/minghf85/EasyCPTrans/releases" target="_blank" class="btn-primary btn-large" data-i18n="hero.download">
+        <a href="#demo" class="btn-primary btn-large" data-i18n="hero.tryDemo">
+          在线体验
+        </a>
+        <a href="https://github.com/minghf85/EasyCPTrans/releases" target="_blank" class="btn-secondary btn-large" data-i18n="hero.download">
           免费下载
         </a>
-        <a href="#features" class="btn-secondary btn-large" data-i18n="hero.learnMore">
-          了解更多
-        </a>
+      </div>
+    </div>
+  </section>
+
+  <section id="demo" class="demo-section">
+    <div class="container">
+      <h2 class="section-title" data-i18n="demo.title">在线体验</h2>
+      <p class="demo-subtitle" data-i18n="demo.subtitle">直接在浏览器中体验核心功能</p>
+      
+      <div class="demo-app">
+        <div class="demo-header">
+          <div class="demo-tabs">
+            <button class="demo-tab active" data-filter="all" data-i18n="demo.tab.all">全部</button>
+            <button class="demo-tab" data-filter="text" data-i18n="demo.tab.text">文本</button>
+            <button class="demo-tab" data-filter="image" data-i18n="demo.tab.image">图片</button>
+            <button class="demo-tab" data-filter="file" data-i18n="demo.tab.file">文件</button>
+          </div>
+          <div class="demo-search">
+            <input type="text" id="demoSearch" placeholder="搜索..." data-i18n-placeholder="demo.search">
+          </div>
+        </div>
+
+        <div class="demo-tags">
+          <button class="demo-tag active" data-tag="all" data-i18n="demo.tag.all">全部</button>
+          <button class="demo-tag" data-tag="Text" data-i18n="demo.tag.text">文本</button>
+          <button class="demo-tag" data-tag="Image" data-i18n="demo.tag.image">图片</button>
+          <button class="demo-tag" data-tag="Link" data-i18n="demo.tag.link">链接</button>
+          <button class="demo-tag" data-tag="Email" data-i18n="demo.tag.email">邮件</button>
+        </div>
+
+        <div class="demo-cards" id="demoCards">
+          <!-- Cards will be inserted here by JavaScript -->
+        </div>
+
+        <div class="demo-footer">
+          <button class="demo-btn" id="demoAddText" data-i18n="demo.addText">添加文本</button>
+          <button class="demo-btn" id="demoAddImage" data-i18n="demo.addImage">添加图片</button>
+          <button class="demo-btn" id="demoClear" data-i18n="demo.clear">清空</button>
+        </div>
+      </div>
+
+      <div class="demo-context-menu" id="demoContextMenu" style="display: none;">
+        <div class="demo-menu-item" data-action="copy" data-i18n="demo.menu.copy">复制</div>
+        <div class="demo-menu-item" data-action="paste" data-i18n="demo.menu.paste">粘贴</div>
+        <div class="demo-menu-item" data-action="pin" data-i18n="demo.menu.pin">置顶</div>
+        <div class="demo-menu-item" data-action="tag" data-i18n="demo.menu.tag">添加标签</div>
+        <div class="demo-menu-item" data-action="ocr" data-i18n="demo.menu.ocr">OCR 识别</div>
+        <div class="demo-menu-item" data-action="translate" data-i18n="demo.menu.translate">翻译</div>
+        <div class="demo-menu-separator"></div>
+        <div class="demo-menu-item danger" data-action="delete" data-i18n="demo.menu.delete">删除</div>
       </div>
     </div>
   </section>
