@@ -98,6 +98,12 @@ export function useClipboardWatcher(
     let unlistenClipboardOverride: (() => void) | null = null;
     let stackState: StackState | null = null;
     let pastePollBusy = false;
+    // A single Windows copy emits one notification per format. Coalesce the
+    // burst and re-read once, so a file is not ingested first as its path text
+    // and then again as the file list.
+    let pendingTimer: number | null = null;
+    let pendingSnapshot: ReadClipboard | null = null;
+    let imagePath = "";
 
     const stopPasteShortcutPolling = () => {
       if (pastePollTimer !== null) {
@@ -249,7 +255,7 @@ export function useClipboardWatcher(
       }
     };
 
-    const handleClipboardChange = async (clipboard: ReadClipboard) => {
+    const processClipboardSnapshot = async (clipboard: ReadClipboard) => {
       if (cancelled) return;
       try {
         if (injectedOverrideSig !== null) {
@@ -310,6 +316,32 @@ export function useClipboardWatcher(
       }
     };
 
+    /**
+     * Coalesces the burst of notifications Windows sends while it fills in the
+     * formats for one copy. The one that carries the file list may arrive after
+     * the one that carries the path text, so ingesting each event separately
+     * stores a copied file twice. Wait for the burst to settle, re-read once, and
+     * classify the finished clipboard (the last event's snapshot is the fallback
+     * if the re-read fails).
+     */
+    const handleClipboardChange = (clipboard: ReadClipboard) => {
+      if (cancelled) return;
+      pendingSnapshot = clipboard;
+      if (pendingTimer !== null) window.clearTimeout(pendingTimer);
+      pendingTimer = window.setTimeout(() => {
+        pendingTimer = null;
+        const fallback = pendingSnapshot;
+        pendingSnapshot = null;
+        if (cancelled) return;
+        void readClipboard(imagePath)
+          .then((latest) => processClipboardSnapshot(latest))
+          .catch((err) => {
+            console.warn("[EasyCPTrans] Clipboard re-read failed, using the event snapshot:", err);
+            if (fallback) void processClipboardSnapshot(fallback);
+          });
+      }, 150);
+    };
+
     const handleStackPasteKeyDown = (event: KeyboardEvent) => {
       const isPasteKey =
         event.key.toLowerCase() === "v" &&
@@ -326,7 +358,7 @@ export function useClipboardWatcher(
 
     const setup = async () => {
       try {
-        const imagePath = await getDefaultSaveImagePath();
+        imagePath = await getDefaultSaveImagePath();
         const initial = await readClipboard(imagePath).catch(() => null);
         if (initial?.files?.value.length) {
           lastSig = `files_${initial.files.value.join("|")}`;
@@ -378,6 +410,18 @@ export function useClipboardWatcher(
             }, 2_000);
           },
         );
+        if (cancelled) {
+          // The effect was torn down while these registrations were in flight
+          // (StrictMode does exactly this in development). Cleanup has already
+          // run, so release them here or they stay subscribed forever and every
+          // copy is ingested twice.
+          unlisten?.();
+          unlistenStackMode?.();
+          unlistenStackReset?.();
+          unlistenTranslationState?.();
+          unlistenClipboardOverride?.();
+          return;
+        }
         window.addEventListener("keydown", handleStackPasteKeyDown, true);
       } catch (err) {
         onErrorRef.current("Clipboard watch setup error: " + String(err));
@@ -388,6 +432,10 @@ export function useClipboardWatcher(
 
     return () => {
       cancelled = true;
+      if (pendingTimer !== null) {
+        window.clearTimeout(pendingTimer);
+        pendingTimer = null;
+      }
       if (unlisten) {
         unlisten();
       }

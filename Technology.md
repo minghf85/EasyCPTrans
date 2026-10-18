@@ -30,6 +30,7 @@ EasyCPTrans/
 │  │  ├─ SettingsModal.tsx             # 设置页
 │  │  ├─ TagManagementPage.tsx         # Tag Admin（含正则规则编辑）
 │  │  ├─ QuickTextEditorPage.tsx       # 文本快速编辑
+│  │  ├─ TutorialOverlay.tsx           # 首次启动的交互式教程浮层
 │  │  └─ ...
 │  ├─ hooks/
 │  │  ├─ useClipboardWatcher.ts        # 剪切板监听、堆叠、去重抑制
@@ -49,7 +50,9 @@ EasyCPTrans/
 │  │  ├─ windowFocus.ts                # 失焦是否该隐藏面板（纯函数）
 │  │  ├─ filter.ts                     # 搜索与多 Tag 筛选
 │  │  ├─ i18n.ts                       # zh-CN / zh-TW / en 文案
-│  │  └─ time.ts                       # 模糊时间格式化
+│  │  ├─ time.ts                       # 模糊时间格式化
+│  │  ├─ tutorial.ts                   # 教程步骤与交互判定（纯函数）
+│  │  └─ tutorialPlacement.ts          # 教程浮层定位（纯函数）
 │  ├─ test/
 │  │  └─ items.ts                      # 测试用的 HistoryItem 工厂
 │  └─ types.ts
@@ -298,6 +301,17 @@ time:2026-07-25T09:00..2026-07-25T18:30
 8. 后端发出 `clipboard-changed`
 9. 前端 `useHistory` 收到事件后 reload
 
+**一次复制只入库一次。** Windows 在填充剪贴板格式时会连续发多次通知：先到的可能只有路径
+文本，后到的才带 `CF_HDROP`。逐条入库会把同一个文件先存成 text、再存成 file，也就是
+「复制一个文件却出现两张卡」。因此：
+
+- 前端 `useClipboardWatcher` 把一阵通知合并，静默 150ms 后**重新读一次剪贴板**再分类，
+  `processClipboardSnapshot` 只跑一次（读失败时退回最后一次事件快照）。
+- 后端 `ingest_clipboard` 用 `AppState.ingest_lock` 把「按 hash 查重 + 插入」串行化。
+  只靠前端去重不够：并发的两次调用会同时查不到旧行，然后各自插入。
+- `setup()` 里的监听注册是异步的。开发模式的 StrictMode 会在注册完成前就执行 cleanup，
+  所以 setup 末尾要检查 `cancelled` 并主动注销，否则监听器会永久泄漏，每次复制都处理两遍。
+
 ### 快捷键
 
 文件：`src-tauri/src/shortcuts.rs`
@@ -383,9 +397,14 @@ Tauri 2 没有内容拖出 API（`start_dragging()` 只能拖窗口），所以�
 
 | item 类型 | 格式 |
 | --- | --- |
-| text | `CF_UNICODETEXT` |
+| text | `CF_UNICODETEXT`（后端支持，但前端目前不发起） |
 | file | `CF_HDROP`（原始路径）+ `"Preferred DropEffect"` |
 | image | `CF_HDROP`（指向预热的临时 PNG）+ `"Preferred DropEffect"` |
+
+**前端只给 file / image 发起拖拽。** `App.tsx` 的 `handleCardDragOut` 会直接拒绝 text
+（提示 `dragOutTextUnsupported`）：文本走 OLE 的 `DoDragDrop` 模态循环时和 Tauri WebView
+冲突，出现过卡死和静默失败，所以后端虽然保留了 `CF_UNICODETEXT` 分支，UI 暂不暴露它。
+教程里的拖拽步骤也因此只在高亮到文件/图片卡片时才要求用户动手。
 
 三条硬性约束，改动时必须保持：
 
@@ -432,7 +451,7 @@ hover 预热总是赶得上；构建失败只让这一次拖动退回系统默�
 
 | item 类型 | 文本框 | `<input type=file>` | 资源管理器 | 图片字段 |
 | --- | --- | --- | --- | --- |
-| text | ✅ | ❌ 语义上就不该成功 | ❌ | ❌ |
+| text | ❌ 前端不发起（见上） | ❌ | ❌ | ❌ |
 | file | ⚠️ 视宿主 | ✅ | ✅ | ❌ |
 | image | ⚠️ 视宿主 | ✅ | ✅ | ❌ 需要 `CF_PNG`/`CF_DIB`，暂未提供 |
 
@@ -659,7 +678,7 @@ rounded-lg p-2`），卡片 `w-[320px] shrink-0 h-full`——高度直接跟随�
 | 层 | 谁 | 行为 |
 | --- | --- | --- |
 | 标题通栏 | `<header>` | 只是标签：hover 用原生 tooltip 报出完整来源（进程名 + 窗口标题 + exe 路径） |
-| **内容区** | 手势面 | 左键按下不动 → 粘贴；按住并移动 ≥5px → 原生拖出。hover 提示「按住此处拖到其他程序」 |
+| **内容区** | 手势面 | 左键按下不动 → 粘贴；按住并移动 ≥5px → 原生拖出（仅文件/图片；文本会提示不支持）。hover 提示「按住此处拖到其他程序」 |
 | metadata 行 | 底部那行 | 只是状态：类型、时间、字数、OCR 等，上面唯一可点的是 OCR 按钮 |
 
 手势由 `src/hooks/useCardGesture.ts` 统一处理，两个结果都归它管，**不依赖 `click` 事件**：
@@ -801,6 +820,49 @@ Tag Admin 里的规则编辑是 `src/components/TagRuleDrawer.tsx` 的抽屉，�
 - 就绪时机有个坑：弹层在量测完成前是 `visibility: hidden`，**隐藏元素无法获得焦点**，所以
   初始聚焦必须等 `placement` 就位，否则键盘进不去菜单、菜单自己的按键处理也永远不会跑。
 
+### 教程引导
+
+`src/components/TutorialOverlay.tsx` 是聚光灯式教程：每一步用 `data-tour` 选择器找到**真实控件**，
+四周压暗、目标留亮，浮层贴在目标旁边。首次启动时自动打开（`localStorage` 的
+`eacptrans-tutorial-seen-v1` 为空，等 config 读完再开，保证文案语言和快捷键清单都是最终值）；
+跳过和完成都会写入标记。设置 → 通用 → 「开始引导」可以随时重播。
+
+步骤定义在 `src/lib/tutorial.ts` 的 `buildTutorialSteps`，只是数据，不持有状态：
+
+- `target`：`data-tour` 选择器。目标不存在或尺寸为 0 时自动退化为居中卡片，所以空历史也能走完整条流程。
+- `require`：要求用户先在真实界面上完成一个动作，`AUTO_ADVANCE_MS` 后自动进入下一步：
+  `click`（点目标）、`input`（在搜索框输入）、`menu`（打开卡片右键菜单，由 `App.tsx` 的
+  `cardMenu` 状态上报）、`queue`（队列里多了一张卡）、`clipboard`（收到 `clipboard-changed`）、
+  `drag`（在卡片内容区按住移动 ≥5px）。`drag` 只在 `hasDraggable` 为真（当前页有非私密的
+  file / image 卡）时启用；文本卡改为只讲解、不要求操作，因为文本拖出本身不受支持。
+  拖拽步骤只观察 `useCardGesture` 的位移，真实 OLE 拖拽仍由卡片自己发起。
+- `interactive`：亮区保持可点击。**非交互步骤会在亮区上盖一层透明挡板**——否则用户误点卡片
+  就会粘贴并隐藏面板，教程等于被静默跳过。
+- `blockLeftClick`：只给菜单步骤用。左键在卡片上是「粘贴」，必须吞掉；右键照常打开菜单。
+- `demo`：目前只有 `queue`，浮层里放一个「把第一张卡片加入队列」的按钮，走 `App.tsx` 的
+  真实 `queuedIds` 状态，卡片上会真的出现 Q1。
+
+判定与定位都是纯函数，单测覆盖：
+
+- `isRequirementMet`（`tutorial.ts`）按**基线增量**判断：复制和入队都要求「这一步开始之后」发生，
+  而不是「当前存在」——否则已有历史时任何步骤都会立刻满足。
+- `placeTooltip`（`tutorialPlacement.ts`）先尝试请求方向，放不下就翻到对面，再夹进视口。
+  窗口默认只有 340px 高，顶部控件的浮层通常会落到左右两侧，而不是盖住目标。
+
+快捷键不是写死的：`App.tsx` 把 `shortcut` / `queueStepShortcut` / `quickPastePrefix` /
+`stackShortcutPrefix` / `wordTranslateShortcut` 和六个 item 键放进 `TutorialContext`，
+浮层用 `displayShortcut` 显示当前生效的值。注意这几个全局键以前只存在于 `SettingsModal`，
+教程需要它们，`App.tsx` 才新增了对应 state——保存设置时 `handleSettingsSaved` 要同步更新。
+
+教程打开时，`tutorialOpen` 被计入 `shouldHandleCardShortcut` 的 `overlayOpen`，
+因此 `Delete` / `Space` / 方向键不会作用到背后的卡片；`Escape` 由浮层在捕获阶段拦截。
+步骤若为了交互切换了视图（搜索、标签选择、右键菜单），`onLeaveStep` 会在离开时把视图复原，
+否则后面的步骤会指向被筛选掉的空卡片带。
+
+新增一步：在 `buildTutorialSteps` 里加一条，给目标元素补 `data-tour`，把标题/正文加进
+`i18n.ts` 三个语言（`I18nKey` 会在编译期检查 key 是否存在），再在
+`tutorial.test.ts` 的步骤 id 列表里同步。
+
 ### 新增文件类型图标
 
 `src/lib/fileIcons.ts` 把扩展名映射到 `{ icon, from, to, label }`。加一个扩展名就往
@@ -872,7 +934,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib        # Rust
 jsdom**）。测试文件与源码同目录，命名 `*.test.ts`；只有 `.ts`，组件测试需要单独决定。
 覆盖的是纯逻辑：`filter.ts`（搜索语法、多 Tag AND、时间范围）、`cardInteraction.ts`、
 `dragGesture.ts`、`dropStage.ts`、`windowFocus.ts`、`tagMatches.ts`、`fileIcons.ts`、
-`imageCache.ts`、`time.ts`、`i18n.ts`、`api.ts`（mock `@tauri-apps/api/core` 断言命令名
+`imageCache.ts`、`time.ts`、`i18n.ts`、`tutorial.ts`（步骤与交互判定）、
+`tutorialPlacement.ts`（浮层定位）、`api.ts`（mock `@tauri-apps/api/core` 断言命令名
 与参数形状）。
 
 `i18n.test.ts` 里有一条**反向引用扫描**：用 `import.meta.glob` 把所有源码当文本读进来，

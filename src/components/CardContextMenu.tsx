@@ -457,6 +457,7 @@ export function CardContextMenu(props: CardContextMenuProps) {
     <div
       ref={popupRef}
       role="menu"
+      data-tour="card-menu"
       aria-label={tr(locale, "itemMenu")}
       aria-orientation="vertical"
       tabIndex={-1}

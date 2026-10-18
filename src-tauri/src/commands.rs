@@ -1279,6 +1279,13 @@ pub async fn ingest_clipboard(
         processed.content_type, hash
     );
 
+    // One copy can produce several notifications while Windows fills in its
+    // formats one at a time. The front end coalesces them, but two calls can
+    // still overlap (and a dev StrictMode remount can leave two listeners), so
+    // serialise the check-then-insert: the second call then sees the row the
+    // first one wrote instead of inserting a duplicate.
+    let ingest_guard = state.ingest_lock.lock().await;
+
     let existing = sqlx::query(
         "SELECT id, tags FROM clipboard_items WHERE content_hash = ?1 AND (is_private IS NULL OR is_private = 0) LIMIT 1",
     )
@@ -1340,6 +1347,8 @@ pub async fn ingest_clipboard(
         );
         (new_id, false)
     };
+
+    drop(ingest_guard);
 
     emit_changed(&app).await;
 

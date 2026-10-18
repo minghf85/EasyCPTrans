@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Cloud, Folder, RefreshCw, ScanText, Shield, Wifi } from "lucide-react";
+import { Cloud, Compass, Folder, RefreshCw, ScanText, Shield, Wifi } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
 import { LOCALE_OPTIONS, normalizeLocale, tr, type Locale } from "../lib/i18n";
@@ -17,12 +17,15 @@ import {
   checkbox,
   iconButton,
   input,
+  inset,
   select,
   surface,
 } from "./ui";
 
 interface Props {
   locale: Locale;
+  /** Replays the guided tour from the first step. */
+  onStartTutorial: () => void;
   onSaved: (settings: {
     shortcut: string;
     queueStepShortcut: string;
@@ -141,15 +144,18 @@ function Section({
   title,
   description,
   icon,
+  tourId,
   children,
 }: {
   title: string;
   description?: string;
   icon?: ReactNode;
+  /** Marks the section for the guided tour. */
+  tourId?: string;
   children: ReactNode;
 }) {
   return (
-    <section className={`${surface} p-6`}>
+    <section data-tour={tourId} className={`${surface} p-6`}>
       <header className="mb-5">
         <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
           {icon}
@@ -399,7 +405,7 @@ function ShortcutRecorder({
   );
 }
 
-export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function SettingsModal({ locale, onSaved }, ref) {
+export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function SettingsModal({ locale, onStartTutorial, onSaved }, ref) {
   const [cachePath, setCachePath] = useState("");
   const [selectedLocale, setSelectedLocale] = useState<Locale>(locale);
   const [shortcut, setShortcut] = useState("CommandOrControl+Shift+V");
@@ -849,6 +855,7 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
       <Section
         title={tr(selectedLocale, "settingsGeneral")}
         description={tr(selectedLocale, "settingsGeneralDesc")}
+        tourId="settings-general"
       >
         <Field label={tr(selectedLocale, "language")}>
           <select
@@ -920,6 +927,21 @@ export const SettingsModal = forwardRef<SettingsModalHandle, Props>(function Set
           onChange={setShowMemoryUsage}
         />
         <p className="text-xs text-gray-500">{tr(selectedLocale, "showMemoryUsageDesc")}</p>
+
+        <div className={`flex items-center justify-between gap-4 p-3 ${inset}`}>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-900">
+              {tr(selectedLocale, "tutorialReplay")}
+            </p>
+            <p className="mt-0.5 text-xs text-gray-500">
+              {tr(selectedLocale, "tutorialReplayDesc")}
+            </p>
+          </div>
+          <button type="button" className={`shrink-0 ${buttonSecondary}`} onClick={onStartTutorial}>
+            <Compass className="h-4 w-4" aria-hidden />
+            {tr(selectedLocale, "tutorialReplayAction")}
+          </button>
+        </div>
       </Section>
 
       <Section

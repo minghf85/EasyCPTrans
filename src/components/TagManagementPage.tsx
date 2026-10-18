@@ -202,7 +202,7 @@ export function TagManagementPage({
 
   return (
     <div className="eacp-animate-fade space-y-6">
-      <section className={`${surface} p-6`}>
+      <section className={`${surface} p-6`} data-tour="tag-manager-page">
         <header className="mb-4">
           <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
             <Tag className="h-5 w-5 text-blue-600" aria-hidden />

@@ -37,7 +37,7 @@ import { QuickTextEditorPage } from "./components/QuickTextEditorPage";
 import { SettingsModal } from "./components/SettingsModal";
 import type { SettingsModalHandle } from "./components/SettingsModal";
 import { TagManagementPage } from "./components/TagManagementPage";
-import { WelcomeGuide } from "./components/WelcomeGuide";
+import { TutorialOverlay } from "./components/TutorialOverlay";
 import {
   focusRing,
   iconButton,
@@ -57,6 +57,7 @@ import { ensureStagedDropPath, stagedDropPath } from "./lib/dropStage";
 import { quickSlotIndex } from "./lib/cardInteraction";
 import { shouldHideOnBlur } from "./lib/windowFocus";
 import { escapeTarget, isEditingField, shouldHandleCardShortcut } from "./lib/interactionRules";
+import { TUTORIAL_SEEN_KEY } from "./lib/tutorial";
 import type { DragChipBitmap } from "./lib/dragChip";
 import type { TagMatchGroup } from "./lib/tagMatches";
 import { getLocalizedReservedNames, getTagDisplayName } from "./lib/tagDisplay";
@@ -239,6 +240,14 @@ function MainApp() {
   const [itemDeleteShortcut, setItemDeleteShortcut] = useState(DEFAULT_ITEM_DELETE_SHORTCUT);
   const [itemOcrShortcut, setItemOcrShortcut] = useState(DEFAULT_ITEM_OCR_SHORTCUT);
   const [itemZoomShortcut, setItemZoomShortcut] = useState(DEFAULT_ITEM_ZOOM_SHORTCUT);
+  // The tour quotes the configured accelerators, so the global ones have to be
+  // kept in state too (the strip shortcuts above already are).
+  const [togglePanelShortcut, setTogglePanelShortcut] = useState(DEFAULT_SHORTCUT);
+  const [queueStepShortcut, setQueueStepShortcut] = useState(DEFAULT_QUEUE_STEP_SHORTCUT);
+  const [quickPastePrefix, setQuickPastePrefix] = useState(DEFAULT_QUICK_PASTE_PREFIX);
+  const [stackShortcutPrefix, setStackShortcutPrefix] = useState(DEFAULT_STACK_SHORTCUT_PREFIX);
+  const [wordTranslateShortcut, setWordTranslateShortcut] = useState(DEFAULT_WORD_TRANSLATE_SHORTCUT);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
   const [locale, setLocale] = useState<Locale>("zh-CN");
   const [pageSize, setPageSize] = useState(50);
   const [historyLimit, setHistoryLimit] = useState(5000);
@@ -267,9 +276,6 @@ function MainApp() {
   const [sessionPrivacyPassword, setSessionPrivacyPassword] = useState<string | null>(null);
   const settingsModalRef = useRef<SettingsModalHandle | null>(null);
   const [settingsSaveState, setSettingsSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [showWelcome, setShowWelcome] = useState(() => {
-    return !localStorage.getItem("eacp-welcome-seen");
-  });
 
   useEffect(() => {
     api
@@ -334,6 +340,11 @@ function MainApp() {
         setItemDeleteShortcut(normalizeLocalShortcut(nextItemDeleteShortcut));
         setItemOcrShortcut(normalizeLocalShortcut(nextItemOcrShortcut));
         setItemZoomShortcut(normalizeLocalShortcut(nextItemZoomShortcut));
+        setTogglePanelShortcut(normalizeLocalShortcut(nextShortcut));
+        setQueueStepShortcut(normalizeLocalShortcut(nextQueueStepShortcut));
+        setQuickPastePrefix(normalizeLocalShortcut(nextQuickPastePrefix));
+        setStackShortcutPrefix(normalizeLocalShortcut(nextStackShortcutPrefix));
+        setWordTranslateShortcut(normalizeLocalShortcut(nextWordTranslateShortcut));
         if (typeof cfg.autoPaste === "boolean") setAutoPaste(cfg.autoPaste);
         if (typeof cfg.keepWindowOpen === "boolean") setKeepWindowOpen(cfg.keepWindowOpen);
         if (typeof cfg.alwaysOnTop === "boolean") setAlwaysOnTop(cfg.alwaysOnTop);
@@ -1140,6 +1151,11 @@ function MainApp() {
     setItemDeleteShortcut(normalizeLocalShortcut(settings.itemDeleteShortcut));
     setItemOcrShortcut(normalizeLocalShortcut(settings.itemOcrShortcut));
     setItemZoomShortcut(normalizeLocalShortcut(settings.itemZoomShortcut));
+    setTogglePanelShortcut(normalizeLocalShortcut(settings.shortcut));
+    setQueueStepShortcut(normalizeLocalShortcut(settings.queueStepShortcut));
+    setQuickPastePrefix(normalizeLocalShortcut(settings.quickPastePrefix));
+    setStackShortcutPrefix(normalizeLocalShortcut(settings.stackShortcutPrefix));
+    setWordTranslateShortcut(normalizeLocalShortcut(settings.wordTranslateShortcut));
     setPageSize(settings.pageSize);
     setHistoryLimit(settings.historyLimit);
     setShowMemoryUsage(settings.showMemoryUsage);
@@ -1229,6 +1245,67 @@ function MainApp() {
     },
     [openCardMenu],
   );
+
+  // First run: open the tour once, after the config has landed so the copy is in
+  // the user's language and the shortcut cheat sheet quotes the real keys.
+  // Skipping and finishing both write the flag; Settings starts it again.
+  useEffect(() => {
+    if (!configReady) return;
+    if (localStorage.getItem(TUTORIAL_SEEN_KEY)) return;
+    const timer = window.setTimeout(() => setTutorialOpen(true), 500);
+    return () => window.clearTimeout(timer);
+  }, [configReady]);
+
+  const closeTutorial = useCallback(() => {
+    localStorage.setItem(TUTORIAL_SEEN_KEY, "1");
+    setTutorialOpen(false);
+    // The tour can leave the app on Settings or Tag Admin; land back on the
+    // history so the next click works the way it did before the tour.
+    setActiveView("all");
+    setTagSelectorOpen(false);
+    setActiveTags([]);
+    setSearchOpen(false);
+    setSearch("");
+    setDebouncedSearch("");
+  }, []);
+
+  const startTutorial = useCallback(() => {
+    setCardMenu(null);
+    setTagSelectorOpen(false);
+    setActiveTags([]);
+    setScope("all");
+    setActiveView("all");
+    setSearchOpen(false);
+    setSearch("");
+    setDebouncedSearch("");
+    setTutorialOpen(true);
+  }, []);
+
+  /**
+   * Steps that change the view for their interaction put it back before the
+   * next step. Without this the search text or the AND-filter chosen while
+   * trying a step would quietly hide the cards the following steps point at.
+   */
+  const handleTutorialStepLeave = useCallback((stepId: string) => {
+    if (stepId === "menu-overview") setCardMenu(null);
+    if (stepId === "search-syntax") {
+      setSearchOpen(false);
+      setSearch("");
+      setDebouncedSearch("");
+    }
+    if (stepId === "tag-filter-row") {
+      setTagSelectorOpen(false);
+      setActiveTags([]);
+      setActiveView("all");
+    }
+  }, []);
+
+  const handleTutorialQueueDemo = useCallback(() => {
+    const item =
+      currentPageItems.find((entry) => entry.id === selectedId) ?? currentPageItems[0];
+    if (!item) return;
+    setQueuedIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
+  }, [currentPageItems, selectedId]);
 
   // The webview's own menu is suppressed by the card itself (its React handler
   // runs first), so text fields and the quick-edit page keep the native copy/paste
@@ -1596,6 +1673,7 @@ function MainApp() {
     ocrPanelOpen: ocrPanel !== null,
     matchPanelOpen: matchPanel !== null,
     lightboxOpen: lightbox !== null,
+    tutorialOpen,
   });
   handlersRef.current = {
     closeCardMenu,
@@ -1631,6 +1709,7 @@ function MainApp() {
     ocrPanelOpen: ocrPanel !== null,
     matchPanelOpen: matchPanel !== null,
     lightboxOpen: lightbox !== null,
+    tutorialOpen,
   };
 
   useEffect(() => {
@@ -1690,7 +1769,11 @@ function MainApp() {
         !shouldHandleCardShortcut({
           viewOwnsKeyboard: s.activeView === "settings" || s.activeView === "tag-manager",
           overlayOpen:
-            Boolean(s.privacyAction) || s.ocrPanelOpen || s.matchPanelOpen || s.lightboxOpen,
+            Boolean(s.privacyAction) ||
+            s.ocrPanelOpen ||
+            s.matchPanelOpen ||
+            s.lightboxOpen ||
+            s.tutorialOpen,
           editingField: isEditingField(target),
         })
       ) {
@@ -1904,6 +1987,7 @@ function MainApp() {
 
         <button
           type="button"
+          data-tour="pin-window"
           // The pinned state is one filled shape rather than a tint on top of
           // the base button: `iconButton` carries its own border and background,
           // and stacking a second set on top means the winner is whoever comes
@@ -1929,6 +2013,7 @@ function MainApp() {
         <div className="flex items-center">
           <button
             type="button"
+            data-tour="search-toggle"
             className={`h-9 w-9 ${iconButton}`}
             title={`${tr(locale, "search")} (tag/app/type/date/size)`}
             aria-label={tr(locale, "search")}
@@ -1951,6 +2036,7 @@ function MainApp() {
           >
             <input
               autoFocus={searchOpen}
+              data-tour="search-input"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder='Search… tag:work app:chrome type:text "exact phrase"'
@@ -1972,7 +2058,7 @@ function MainApp() {
             so the tabs' focus rings — and the underline, which is drawn 8px below
             the tab — are not clipped by the scroll container. The negative margin
             keeps the header's height and the tabs' width exactly as they were. */}
-        <div className="eacp-scroll-none -m-2 flex flex-1 items-center gap-1 overflow-x-auto p-2" id="filter-scroll">
+        <div className="eacp-scroll-none -m-2 flex flex-1 items-center gap-1 overflow-x-auto p-2" id="filter-scroll" data-tour="tabs">
           {tabList.map(({ key, label, icon: Icon }) => {
             const active = key === "tag-selector" ? tagSelectorOpen : activeView === key;
             const TabIcon =
@@ -1996,6 +2082,17 @@ function MainApp() {
               <Fragment key={key}>
                 <button
                   type="button"
+                  data-tour={
+                    key === "tag-selector"
+                      ? "tab-tags"
+                      : key === "tag-manager"
+                        ? "tab-tag-manager"
+                        : key === "settings"
+                          ? "tab-settings"
+                          : key === "all"
+                            ? "tab-all"
+                            : undefined
+                  }
                   aria-pressed={active}
                   onClick={() => onTabClick(key)}
                   className={`relative inline-flex shrink-0 items-center gap-2 whitespace-nowrap px-3 py-2 text-sm font-medium ${transition} ${focusRing} active:scale-[0.98] active:translate-y-0 ${
@@ -2028,7 +2125,7 @@ function MainApp() {
                   // A filled well rather than another bordered box: the tags
                   // inside each carry their own edge, and nesting the two reads
                   // as a double border.
-                  <div className="eacp-scroll flex shrink-0 items-center gap-2 overflow-x-auto rounded-lg bg-gray-50 px-2 py-1.5">
+                  <div className="eacp-scroll flex shrink-0 items-center gap-2 overflow-x-auto rounded-lg bg-gray-50 px-2 py-1.5" data-tour="tag-selector-row">
                     {selectableTags.length === 0 ? (
                       <span className="px-1 text-xs text-gray-500">{tr(locale, "noTagsInline")}</span>
                     ) : (
@@ -2102,7 +2199,12 @@ function MainApp() {
       >
         {/* Settings and TagManager stay mounted to preserve form state across tab switches. */}
         <div className={activeView === "settings" ? "" : "hidden"}>
-          <SettingsModal ref={settingsModalRef} locale={locale} onSaved={handleSettingsSaved} />
+          <SettingsModal
+            ref={settingsModalRef}
+            locale={locale}
+            onStartTutorial={startTutorial}
+            onSaved={handleSettingsSaved}
+          />
         </div>
         <div className={activeView === "tag-manager" ? "" : "hidden"}>
           <TagManagementPage
@@ -2131,6 +2233,7 @@ function MainApp() {
               <div
                 ref={cardStripRef}
                 id="card-scroll"
+                data-tour="card-strip"
                 // The padding is what clears the selected card's `ring-2`: a scroll
                 // container clips at its padding box, so any bleed has to be inside
                 // it. Cards sit directly in the lower area — no recessed well.
@@ -2273,15 +2376,39 @@ function MainApp() {
         />
       )}
 
-      {showWelcome && (
-        <WelcomeGuide
-          locale={locale}
-          onClose={() => {
-            localStorage.setItem("eacp-welcome-seen", "1");
-            setShowWelcome(false);
-          }}
-        />
-      )}
+      <TutorialOverlay
+        open={tutorialOpen}
+        locale={locale}
+        context={{
+          // A filtered page can be empty even when history is not; the tour's
+          // card steps only need to know whether there is anything to point at.
+          hasItems: sourceHistory.length > 0,
+          // Text drag-out is unsupported, so the tour only asks for the gesture
+          // when a file or image card is actually on the current page.
+          hasDraggable: currentPageItems.some(
+            (entry) =>
+              !entry.isPrivate &&
+              (entry.contentType === "file" || entry.contentType === "image"),
+          ),
+          shortcuts: {
+            togglePanel: togglePanelShortcut,
+            quickPastePrefix,
+            queueStep: queueStepShortcut,
+            stackPrefix: stackShortcutPrefix,
+            translate: wordTranslateShortcut,
+            itemTag: itemTagShortcut,
+            itemPrivate: itemPrivateShortcut,
+            itemPin: itemPinShortcut,
+            itemDelete: itemDeleteShortcut,
+            itemOcr: itemOcrShortcut,
+            itemZoom: itemZoomShortcut,
+          },
+        }}
+        signals={{ menuOpen: cardMenu !== null, queuedCount: queuedIds.length }}
+        onClose={closeTutorial}
+        onLeaveStep={handleTutorialStepLeave}
+        onQueueDemo={handleTutorialQueueDemo}
+      />
     </div>
   );
 }

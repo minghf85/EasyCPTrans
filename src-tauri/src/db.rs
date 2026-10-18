@@ -5,6 +5,12 @@ use std::path::Path;
 
 pub struct AppState {
     pub pool: SqlitePool,
+    /// Serialises the hash lookup + insert in `ingest_clipboard`.
+    ///
+    /// Windows emits one clipboard notification per format during a copy, so the
+    /// same copy can reach the front end twice. Without this lock both calls
+    /// miss the SELECT and insert, and the item is stored twice.
+    pub ingest_lock: tokio::sync::Mutex<()>,
 }
 
 pub fn compute_hash(content_type: &str, content: &str) -> String {

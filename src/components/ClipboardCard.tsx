@@ -322,6 +322,9 @@ export const ClipboardCard = memo(function ClipboardCard({
   const typeLabel = useMemo(() => detectLabel(item), [item]);
   const codeLike = useMemo(() => isCodeLike(item), [item]);
   const hasPrivacy = item.isPrivate;
+  // Text drag-out is deliberately unsupported (see `handleCardDragOut`), so only
+  // these cards get the tour's "try dragging" marker.
+  const draggable = !hasPrivacy && (item.contentType === "file" || item.contentType === "image");
   const chars = item.metadata?.length?.[0];
   const totalSize = item.metadata?.totalSize?.[0] ?? item.metadata?.size?.[0];
   const width = item.metadata?.width?.[0];
@@ -621,6 +624,7 @@ export const ClipboardCard = memo(function ClipboardCard({
       ref={tiltRef}
       id={`history-item-${item.id}`}
       data-card-id={item.id}
+      data-tour={draggable ? "draggable-card" : undefined}
       // Programmatic focus target only, so the actions menu can hand focus back
       // without putting the card in the tab order.
       tabIndex={-1}
@@ -677,9 +681,18 @@ export const ClipboardCard = memo(function ClipboardCard({
             is a status line, so neither of them acts on the card. */}
         <div
           className="flex min-h-0 flex-1 cursor-grab flex-col active:cursor-grabbing"
+          data-tour="card-body"
           onPointerDown={handleCardPointerDown}
           onPointerEnter={warmChip}
-          title={locale ? tr(locale, "dragOutHint") : "Press and drag into another app"}
+          title={
+            !locale
+              ? "Press and drag into another app"
+              : item.contentType === "text"
+                ? tr(locale, "dragOutHintText")
+                : hasPrivacy
+                  ? tr(locale, "dragOutPrivate")
+                  : tr(locale, "dragOutHint")
+          }
         >
           {queueSlot && (
           <span className="mb-2 inline-flex w-fit items-center rounded-lg bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-700">
