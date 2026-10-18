@@ -32,6 +32,12 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: here("./index.html"),
+        video: here("./video.html"),
+      },
+    },
   },
   server: {
     port: 4173,

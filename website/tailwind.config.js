@@ -11,6 +11,7 @@ const glob = (value) => value.replace(/\\/g, "/");
 export default {
   content: [
     glob(`${websiteRoot}index.html`),
+    glob(`${websiteRoot}video.html`),
     glob(`${websiteRoot}src/**/*.{ts,tsx}`),
     // The demo reuses the application's components, so their classes have to be
     // scanned too. The app build uses its own config.

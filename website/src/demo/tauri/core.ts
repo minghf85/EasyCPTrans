@@ -158,6 +158,15 @@ export async function invoke<T>(cmd: string, args?: Args): Promise<T> {
           securityQuestion: "What is the demo password?",
         };
 
+      // The promo panel renders the real MemoryChip; give it a plausible value
+      // instead of leaving the chip out of the replica.
+      case "get_process_stats":
+        return {
+          workingSetBytes: 12_900_000,
+          privateBytes: 8_400_000,
+          peakWorkingSetBytes: 28_000_000,
+        };
+
       case "list_ocr_languages":
         return [
           { tag: "zh-Hans-CN", name: "中文（简体）" },

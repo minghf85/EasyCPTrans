@@ -46,6 +46,7 @@ const COPY = {
     nav: {
       features: "功能",
       demo: "在线体验",
+      video: "宣传片",
       shortcuts: "快捷键",
       download: "下载",
       github: "GitHub",
@@ -130,6 +131,7 @@ const COPY = {
     nav: {
       features: "Features",
       demo: "Live demo",
+      video: "Film",
       shortcuts: "Shortcuts",
       download: "Download",
       github: "GitHub",
@@ -348,6 +350,7 @@ export function LandingPage() {
           <nav className="ml-4 hidden items-center gap-1 md:flex">
             <NavLink href="#features">{copy.nav.features}</NavLink>
             <NavLink href="#demo">{copy.nav.demo}</NavLink>
+            <NavLink href="./video.html">{copy.nav.video}</NavLink>
             <NavLink href="#shortcuts">{copy.nav.shortcuts}</NavLink>
             <NavLink href="#download">{copy.nav.download}</NavLink>
           </nav>
@@ -374,7 +377,7 @@ export function LandingPage() {
               href={REPO}
               target="_blank"
               rel="noreferrer"
-              className={`hidden h-9 items-center gap-2 px-3 text-sm sm:inline-flex ${buttonSecondary}`}
+              className={`hidden h-9 items-center gap-2 px-3 text-sm lg:inline-flex ${buttonSecondary}`}
             >
               <Code2 className="h-4 w-4" aria-hidden />
               {copy.nav.github}
@@ -652,6 +655,9 @@ export function LandingPage() {
             <span>{copy.footer.builtBy}</span>
           </div>
           <div className="flex flex-wrap items-center gap-4 text-xs text-gray-500">
+            <a className="hover:text-gray-900" href="./video.html">
+              {copy.nav.video}
+            </a>
             <a className="hover:text-gray-900" href={REPO} target="_blank" rel="noreferrer">
               {copy.footer.source}
             </a>

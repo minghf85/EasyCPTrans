@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The promo page is its own dark stage; the landing page keeps the light theme. */
+html.promo-page,
+html.promo-page body,
+body.promo-page {
+  background: #070b14;
+  color: #fff;
+}
+
+body.promo-page {
+  min-height: 100vh;
+}
+
+@keyframes promo-eq {
+  from {
+    transform: scaleY(0.35);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .promo-eq {
+    animation: none !important;
+  }
+}
