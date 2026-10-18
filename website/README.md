@@ -98,7 +98,7 @@ After that, every push to `main` that touches `website/**`, `src/**`,
 `package.json`, or the lockfile rebuilds and deploys the site. You can also run
 **Actions → Deploy website → Run workflow** manually.
 
-Expected URL: <https://minghf85.github.io/easycptrans/>
+Expected URL: <https://minghf85.github.io/EasyCPTrans/>
 
 The Vite build uses a relative `base` (`./`), so the same artifact works at the
 project path and at a custom domain without rebuilding.

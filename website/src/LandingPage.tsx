@@ -37,7 +37,7 @@ import {
 
 const REPO = "https://github.com/minghf85/EasyCPTrans";
 const RELEASES = `${REPO}/releases/latest`;
-const SITE_URL = "https://minghf85.github.io/easycptrans/";
+const SITE_URL = "https://minghf85.github.io/EasyCPTrans/";
 
 /* ────────────────────────────── Copy ───────────────────────────────────── */
 
