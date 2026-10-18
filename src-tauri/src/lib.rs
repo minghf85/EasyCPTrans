@@ -13,6 +13,7 @@ mod db;
 mod drag_out;
 mod focus;
 mod lan_sync;
+mod memory;
 mod ocr;
 mod pipeline;
 mod privacy;
@@ -110,7 +111,7 @@ pub(crate) fn show_main_window_near_cursor<R: tauri::Runtime>(
     // Remembered before the panel takes focus: this is the window the user was
     // typing in, and therefore the one a paste has to be sent back to.
     focus::remember_foreground_window(focus::native_handle(&window));
-    window.show().map_err(|e| e.to_string())?;
+    memory::show_window(&window).map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -126,7 +127,7 @@ pub(crate) fn toggle_main_window_from_shortcut<R: tauri::Runtime>(
     let focused = window.is_focused().unwrap_or(false);
 
     if visible && focused {
-        window.hide().map_err(|e| e.to_string())?;
+        memory::hide_window(&window).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
@@ -385,7 +386,7 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
+                            let _ = memory::show_window(&window);
                             let _ = window.set_focus();
                         }
                     }
@@ -407,7 +408,7 @@ pub fn run() {
                     } = event
                     {
                         if let Some(window) = tray.app_handle().get_webview_window("main") {
-                            let _ = window.show();
+                            let _ = memory::show_window(&window);
                             let _ = window.set_focus();
                         }
                     }
@@ -433,10 +434,15 @@ pub fn run() {
                     return;
                 }
                 api.prevent_close();
+                // `WindowEvent` hands us a `Window`, not a `WebviewWindow`; the
+                // deferred trim looks the webview up by label and also lowers
+                // WebView2's memory target once the panel is actually hidden.
                 let _ = window.hide();
+                memory::schedule_idle_trim(window.app_handle().clone());
             }
         })
         .invoke_handler(tauri::generate_handler![
+            memory::hide_main_window,
             focus::paste_to_previous_window,
             commands::ingest_clipboard,
             commands::read_clipboard_files,

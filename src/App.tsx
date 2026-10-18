@@ -842,7 +842,7 @@ function MainApp() {
       // Copy only: get out of the way, unless the panel is pinned or the user
       // asked for it to stay.
       if (!keepWindowOpen && !autoPaste && !alwaysOnTop) {
-        await getCurrentWindow().hide();
+        await api.hideMainWindow();
       }
 
       // Copy and paste in one gesture. A pinned panel stays put and gets its
@@ -1597,7 +1597,7 @@ function MainApp() {
         ) {
           return;
         }
-        void appWindow.hide().catch(() => {});
+        void api.hideMainWindow().catch(() => {});
       }, 160);
     };
     void appWindow.onFocusChanged(({ payload }) => {

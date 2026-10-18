@@ -46,6 +46,7 @@ EasyCPTrans/
 │  │  ├─ dropStage.ts                  # 拖出用的临时图片预热与缓存
 │  │  ├─ menuPlacement.ts              # 弹出层翻转/夹紧（纯函数）
 │  │  ├─ fileIcons.ts                  # 扩展名 → 文件类型图标与配色
+│  │  ├─ imageThumbnail.ts              # 卡片图片缩略图（控制解码内存）
 │  │  ├─ tagMatches.ts                 # 解析正则标签的匹配元数据
 │  │  ├─ windowFocus.ts                # 失焦是否该隐藏面板（纯函数）
 │  │  ├─ filter.ts                     # 搜索与多 Tag 筛选
@@ -64,6 +65,7 @@ EasyCPTrans/
 │  │  ├─ commands.rs                   # Tauri 命令、配置、历史、翻译、隐私
 │  │  ├─ db.rs                         # SQLite 初始化、hash、迁移
 │  │  ├─ lib.rs                        # Tauri 初始化、窗口、托盘、invoke handler
+│  │  ├─ memory.rs                     # 隐藏时释放 WebView2 / 工作集
 │  │  ├─ shortcuts.rs                  # 全局快捷键与后端快捷粘贴
 │  │  ├─ sync.rs                       # WebDAV 同步
 │  │  ├─ privacy.rs                    # private item 加密
@@ -907,6 +909,73 @@ Tag Admin 里的规则编辑是 `src/components/TagRuleDrawer.tsx` 的抽屉，�
 - 发音音频
 
 建议保持同一个 item `pending -> done` 的更新模型，避免重复历史。
+
+## 内存占用与优化
+
+面板大部分时间处于隐藏状态，内存由三部分组成，调优前（`0.5.0`，738 条历史）的实测：
+
+| 部分 | 实测 | 说明 |
+| --- | --- | --- |
+| `easycptrans.exe` | 工作集 ~55MB，私有 ~18MB，峰值 ~84MB | 顶栏 MemoryChip 显示的是这一项 |
+| WebView2 renderer | 私有 ~51MB | React 页面 + 图片解码 |
+| WebView2 GPU / 其他子进程 | 私有 ~150MB / ~60MB | Chromium 固定开销，含共享 DLL |
+
+因此「MemoryChip 50–100MB」并不等于全部占用，真正的大头在 WebView2 子进程。优化按以下四层实施：
+
+### 1. 隐藏时释放 WebView2 与工作集
+
+文件：`src-tauri/src/memory.rs`
+
+- 隐藏：`memory::hide_window()` 先 `hide()`，再把 WebView2 的
+  `ICoreWebView2_19::SetMemoryUsageTargetLevel(Low)`，并排一次 3 秒后的
+  `EmptyWorkingSet`。WebView2 的接口是官方提供的「当前未使用，释放缓存」开关；
+  `EmptyWorkingSet` 把 Rust 进程的物理页交还系统，也就是 MemoryChip 显示的数值。
+- 显示：`memory::show_window()` 先恢复 `Normal`，再 `show()`，并取消尚未执行的 trim。
+- 触发点覆盖所有显示/隐藏路径：快捷键、托盘、关闭按钮、复制/粘贴、快捷粘贴、
+  队列粘贴，以及前端的两个 `api.hideMainWindow()`。
+- trim 在 3 秒后**重新检查窗口是否仍隐藏**，可见时不动；连续 ingest 只合并成一次。
+
+新增隐藏/显示入口时必须走这两个 helper。直接 `window.hide()` 不会降低 WebView2
+的内存目标，也不会安排回收。
+
+### 2. 卡片图片只保留缩略图
+
+文件：`src/lib/imageThumbnail.ts`、`src/components/ClipboardCard.tsx`
+
+卡片图片框是 320×128，但以前把原始分辨率的 data URL 直接塞进 `<img>`，WebView2
+会为每张可见卡片解码并驻留一张全尺寸位图（4K 截图约 33MB RGBA）。现在图片进入
+视口后先 `createImageBitmap` → canvas 缩放到长边 640 → WebP，再交给 `<img>`；
+`bitmap.close()` 立即释放全尺寸像素。卡片离开视口仍然 `setImageSrc(null)` 并
+`forgetImage(id)`。
+
+**不要**把 `imageCache` 改成缓存缩略图：卡片复制图片和 OCR 预览（`App.tsx`、
+`OcrResultModal.tsx`）需要原始 data URL。缩略图只存在于卡片自己的 state 里。
+
+### 3. 自动 OCR 单飞
+
+文件：`src-tauri/src/ocr.rs`
+
+识别是内存峰值最高的操作（编码串 + 解码字节 + 全尺寸 WinRT 位图）。自动 OCR 现在
+由 `AUTO_OCR_BUSY` 限制为同一时间只跑一个，连续截图不会再叠加；忙时直接跳过，手动
+OCR 不受影响。`ingest_clipboard` 也把图片 data URL **移入** OCR 任务
+（`std::mem::take`），不再整份 clone。
+
+### 4. ECDICT 走索引
+
+文件：`src-tauri/src/commands.rs` 的 `lookup_ecdict_sqlite`
+
+原查询 `lower(word) = ?1 OR sw = ?2` 无法使用索引，在 340 万行 / 469MB 的
+`stardict.db` 上是全表扫描（实测 1.6s/次），还会把整份字典压进文件缓存。现在优先用
+`word = ?1 OR sw = ?2`（`idx_stardict_word` / `idx_stardict_sw`，实测 15ms），
+只有未命中时才回退到大小写不敏感的扫描，兼容第三方混合大小写的字典。
+
+### 排查建议
+
+- MemoryChip 只统计 Rust 主进程；怀疑总量时用任务管理器看 `EasyCPTrans` 进程组，
+  或按 PID 查 `msedgewebview2.exe` 子进程。
+- `[EasyCPTrans] Released memory while the panel is hidden` 表示隐藏后的回收确实执行了。
+- 新增会大量分配内存的功能（图片、OCR、同步）时，先确认生命周期：临时缓冲区应在
+  操作结束后释放，长期缓存必须有上限。
 
 ## 调试日志
 

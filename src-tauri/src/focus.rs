@@ -84,7 +84,7 @@ pub async fn paste_to_previous_window(
     let mut restored_focus = false;
     if hide_panel {
         if let Some(window) = &panel {
-            window.hide().map_err(|err| err.to_string())?;
+            crate::memory::hide_window(window).map_err(|err| err.to_string())?;
         }
     } else if let Some(tracked) = previous_handle().filter(|handle| imp::is_live(*handle)) {
         restored_focus = imp::activate(tracked);

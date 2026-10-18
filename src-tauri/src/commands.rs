@@ -867,11 +867,16 @@ async fn lookup_ecdict_sqlite(path: &Path, query: &str) -> Result<Option<Diction
 
     let normalized = query.to_ascii_lowercase();
     let stripped = strip_word(query);
+    // ECDICT stores `word` lower-case and `sw` as its lower-case alphanumeric
+    // form, so these two equalities can use idx_stardict_word / idx_stardict_sw.
+    // `lower(word)` cannot use an index: on a 3.4M-row dictionary that was a
+    // full 469 MB scan (~1.6 s) and it pulled the whole file through the page
+    // cache on every translated word.
     let row = sqlx::query(
         "SELECT word, phonetic, definition, translation, pos, collins, oxford, tag, bnc, frq, exchange, detail, audio
          FROM stardict
-         WHERE lower(word) = ?1 OR sw = ?2
-         ORDER BY CASE WHEN lower(word) = ?1 THEN 0 ELSE 1 END
+         WHERE word = ?1 OR sw = ?2
+         ORDER BY CASE WHEN word = ?1 THEN 0 ELSE 1 END
          LIMIT 1",
     )
     .bind(&normalized)
@@ -879,6 +884,24 @@ async fn lookup_ecdict_sqlite(path: &Path, query: &str) -> Result<Option<Diction
     .fetch_optional(pool.as_ref())
     .await
     .map_err(|err| err.to_string())?;
+
+    // Third-party dictionaries do not all follow ECDICT's lower-case convention.
+    // Pay for the scanning query only when the indexed one found nothing.
+    let row = match row {
+        Some(row) => Some(row),
+        None => sqlx::query(
+            "SELECT word, phonetic, definition, translation, pos, collins, oxford, tag, bnc, frq, exchange, detail, audio
+             FROM stardict
+             WHERE lower(word) = ?1 OR sw = ?2
+             ORDER BY CASE WHEN lower(word) = ?1 THEN 0 ELSE 1 END
+             LIMIT 1",
+        )
+        .bind(&normalized)
+        .bind(&stripped)
+        .fetch_optional(pool.as_ref())
+        .await
+        .map_err(|err| err.to_string())?,
+    };
 
     let entry = row.map(|row| DictionaryEntry {
         word: row.try_get("word").unwrap_or_default(),
@@ -1352,12 +1375,20 @@ pub async fn ingest_clipboard(
 
     emit_changed(&app).await;
 
+    // The panel is normally hidden while the user is copying. Release the
+    // working set once things settle instead of carrying the ingest buffers
+    // (image data URLs are several megabytes) for the rest of the session.
+    crate::memory::schedule_idle_trim(app.clone());
+
     // Fresh screenshots are recognized in the background so the image becomes
-    // searchable by its text without the user asking for it.
+    // searchable by its text without the user asking for it. `content` is moved
+    // into the OCR task rather than cloned: it is not needed afterwards, and a
+    // clone here is a full copy of the image data URL.
     if !deduped && processed.content_type == "image" {
         let app_config = read_app_config(&app);
         if app_config.ocr_enabled && app_config.ocr_auto {
-            crate::ocr::spawn_auto_ocr(app.clone(), item_id, processed.content.clone());
+            let data_url = std::mem::take(&mut processed.content);
+            crate::ocr::spawn_auto_ocr(app.clone(), item_id, data_url);
         }
     }
 

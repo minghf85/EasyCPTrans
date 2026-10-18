@@ -533,7 +533,7 @@ async fn execute_recent_paste<R: Runtime>(app: AppHandle<R>, index: usize) -> Re
     );
 
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
+        let _ = crate::memory::hide_window(&window);
     }
     wait_for_shortcut_release();
     std::thread::sleep(Duration::from_millis(80));
@@ -586,7 +586,7 @@ async fn execute_queue_step<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
     let _ = mark_item_used(&app, item.id).await;
 
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
+        let _ = crate::memory::hide_window(&window);
         let _ = window.emit(
             QUEUE_UPDATED_EVENT_NAME,
             QueueUpdatedEvent { ids: remaining_ids },

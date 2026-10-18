@@ -22,6 +22,7 @@ import {
 import { formatExactTime, formatTime } from "../lib/time";
 import { api } from "../lib/api";
 import { fetchImageDataUrl, forgetImage } from "../lib/imageCache";
+import { makeCardThumbnail } from "../lib/imageThumbnail";
 import { fetchAppIcon, getCachedAppIcon } from "../lib/appIcons";
 import { brandColorFor, headerBandColor, prewarmBrandColor } from "../lib/brandColor";
 import {
@@ -388,8 +389,11 @@ export const ClipboardCard = memo(function ClipboardCard({
             if (!imageRequestedRef.current) {
               imageRequestedRef.current = true;
               void fetchImageDataUrl(item.id, api.getImageContent)
-                .then((dataUrl) => {
-                  setImageSrc(dataUrl);
+                .then(async (dataUrl) => {
+                  // Downscaling happens off the critical path, so the card may
+                  // already have left the viewport by the time it finishes.
+                  if (!imageRequestedRef.current) return;
+                  setImageSrc(await makeCardThumbnail(dataUrl));
                   prewarmImageDrop(item);
                 })
                 .catch(() => setImageSrc(""));

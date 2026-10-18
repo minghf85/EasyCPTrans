@@ -163,6 +163,13 @@ export const api = {
       peakWorkingSetBytes: number;
     }>("get_process_stats"),
 
+  /**
+   * Hides the panel through Rust, which also lowers WebView2's memory target
+   * and schedules a working-set trim. Prefer this over `getCurrentWindow().hide()`
+   * so every hide path releases memory the same way.
+   */
+  hideMainWindow: () => invoke<void>("hide_main_window"),
+
   convertEcdictCsvToSqlite: (csvPath: string, dbPath: string) =>
     invoke<number>("convert_ecdict_csv_to_sqlite", { csvPath, dbPath }),
 

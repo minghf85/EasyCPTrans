@@ -7,6 +7,7 @@ use base64::Engine as _;
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -656,10 +657,51 @@ pub async fn create_text_item_from_ocr(app: AppHandle, id: i64) -> Result<i64, S
     Ok(item_id)
 }
 
+/// Automatic OCR is allowed to hold one decoded image at a time. Copying several
+/// screenshots in a row used to start one recognition per image; each keeps the
+/// encoded data URL, the decoded bytes and a full-resolution WinRT bitmap alive
+/// at once. A second arrival is skipped instead of queued — manual OCR from the
+/// card still works, and the image is recognized the next time it is copied.
+static AUTO_OCR_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// Clears `AUTO_OCR_BUSY` on every exit path, including the early returns below.
+struct AutoOcrGuard;
+
+impl Drop for AutoOcrGuard {
+    fn drop(&mut self) {
+        AUTO_OCR_BUSY.store(false, Ordering::Release);
+    }
+}
+
+/// Schedules the hidden-panel trim however the recognition ended.
+///
+/// Recognition holds the largest buffers in the app, but it has three early
+/// returns (decode failure, task panic, nothing recognized). Scheduling from a
+/// guard means every one of them releases the memory, not just a success.
+struct ScheduleTrimOnDrop(AppHandle);
+
+impl Drop for ScheduleTrimOnDrop {
+    fn drop(&mut self) {
+        crate::memory::schedule_idle_trim(self.0.clone());
+    }
+}
+
+/// Whether an automatic recognition is holding its image buffers right now.
+///
+/// The memory reclaimer uses this to skip a trim mid-recognition: trimming then
+/// would just fault the same pages back in as the recognizer touches them.
+pub(crate) fn auto_ocr_busy() -> bool {
+    AUTO_OCR_BUSY.load(Ordering::Acquire)
+}
+
 /// Fire-and-forget OCR for freshly captured screenshots: the result lands in the
 /// item metadata, which makes the image searchable by its text.
 pub fn spawn_auto_ocr(app: AppHandle, item_id: i64, data_url: String) {
     if data_url.is_empty() || data_url.len() > AUTO_OCR_MAX_ENCODED_LEN {
+        return;
+    }
+    if AUTO_OCR_BUSY.swap(true, Ordering::AcqRel) {
+        println!("[EasyCPTrans] Auto OCR skipped: another recognition is running");
         return;
     }
 
@@ -667,6 +709,8 @@ pub fn spawn_auto_ocr(app: AppHandle, item_id: i64, data_url: String) {
     let configured = config.ocr_language.trim().to_string();
 
     tauri::async_runtime::spawn(async move {
+        let _guard = AutoOcrGuard;
+        let _trim = ScheduleTrimOnDrop(app.clone());
         let requested = if configured.is_empty() {
             None
         } else {
