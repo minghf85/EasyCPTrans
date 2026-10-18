@@ -41,3 +41,7 @@ Thumbs.db
 # Local dictionaries and generated databases
 ECDICT/
 nsis-tools
+
+# Local website review screenshots
+website/screenshot-*.png
+website/shot-*.png

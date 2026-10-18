@@ -1,7 +1,7 @@
 {
   "name": "easycptrans",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
+    "website:dev": "vite --config website/vite.config.ts",
+    "website:build": "vite build --config website/vite.config.ts",
+    "website:preview": "vite preview --config website/vite.config.ts",
     "tauri": "tauri"
   },
   "dependencies": {
